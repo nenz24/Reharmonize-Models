@@ -1,0 +1,3 @@
+[submodule "vendor/BTC-ISMIR19"]
+	path = vendor/BTC-ISMIR19
+	url = https://github.com/jayg996/BTC-ISMIR19.git
