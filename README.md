@@ -51,3 +51,24 @@ recording without editing the notebook, start Jupyter with:
 ```bash
 AUDIO_PATH=data/song.mp3 uv run jupyter lab
 ```
+
+## Isolate vocals before melody extraction
+
+CREPE can follow bass or lead instruments when it receives a full mix. Extract a vocal stem first:
+
+```bash
+uv run reharmonize-separate data/song.mp3 --output artifacts/song-vocals.wav --duration 30
+```
+
+The first run downloads the 319 MB pretrained HDemucs checkpoint. BTC should continue to analyze
+the original mix; pass the resulting vocal WAV to `melody_pitch_track`. Short BTC label flicker can
+be cleaned before melody alignment with:
+
+```python
+from reharmonize_models import smooth_chord_intervals
+
+chords = smooth_chord_intervals(chords, minimum_duration=0.35)
+```
+
+`notebooks/03_vocal_aware_analysis.ipynb` combines these steps for `data/song.mp3` and writes its
+vocal stem and smoothed chord labels under `artifacts/`.

@@ -15,6 +15,7 @@ dependencies = [
   "pretty-midi>=0.2.10",
   "pyyaml>=6.0",
   "scikit-learn>=1.6",
+  "soundfile>=0.13",
   "torch>=2.7",
   "torchaudio>=2.7",
   "torchcrepe>=0.0.24",
@@ -22,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 reharmonize-detect = "reharmonize_models.btc:main"
+reharmonize-separate = "reharmonize_models.separation:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3"]

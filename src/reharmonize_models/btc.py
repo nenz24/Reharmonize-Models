@@ -63,6 +63,63 @@ def _collapse_predictions(
     return pd.DataFrame(rows, columns=["start", "end", "chord"])
 
 
+def smooth_chord_intervals(chords: pd.DataFrame, *, minimum_duration: float = 0.35) -> pd.DataFrame:
+    """Absorb very short BTC intervals into the strongest adjacent segment."""
+    required = {"start", "end", "chord"}
+    if not required.issubset(chords.columns):
+        raise ValueError(f"Chord table must contain {sorted(required)}")
+    if minimum_duration < 0:
+        raise ValueError("minimum_duration must be non-negative")
+
+    rows = [
+        {"start": float(row.start), "end": float(row.end), "chord": str(row.chord)}
+        for row in chords.itertuples(index=False)
+        if float(row.end) > float(row.start)
+    ]
+
+    def merge_equal_neighbours() -> None:
+        index = 1
+        while index < len(rows):
+            if rows[index - 1]["chord"] == rows[index]["chord"]:
+                rows[index - 1]["end"] = rows[index]["end"]
+                rows.pop(index)
+            else:
+                index += 1
+
+    merge_equal_neighbours()
+    while len(rows) > 1:
+        short = [
+            (row["end"] - row["start"], index)
+            for index, row in enumerate(rows)
+            if row["end"] - row["start"] < minimum_duration
+        ]
+        if not short:
+            break
+        _, index = min(short)
+        if index == 0:
+            rows[1]["start"] = rows[0]["start"]
+            rows.pop(0)
+        elif index == len(rows) - 1:
+            rows[index - 1]["end"] = rows[index]["end"]
+            rows.pop(index)
+        elif rows[index - 1]["chord"] == rows[index + 1]["chord"]:
+            rows[index - 1]["end"] = rows[index + 1]["end"]
+            rows.pop(index + 1)
+            rows.pop(index)
+        else:
+            left_duration = rows[index - 1]["end"] - rows[index - 1]["start"]
+            right_duration = rows[index + 1]["end"] - rows[index + 1]["start"]
+            if left_duration >= right_duration:
+                rows[index - 1]["end"] = rows[index]["end"]
+                rows.pop(index)
+            else:
+                rows[index + 1]["start"] = rows[index]["start"]
+                rows.pop(index)
+        merge_equal_neighbours()
+
+    return pd.DataFrame(rows, columns=["start", "end", "chord"])
+
+
 class BTCChordDetector:
     """Run the published BTC-ISMIR19 checkpoint without modifying its submodule."""
 

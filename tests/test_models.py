@@ -4,7 +4,7 @@ import torch
 
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, chord_pitch_classes,
-    melody_clash_score, pairwise_ranking_loss, save_lab,
+    melody_clash_score, pairwise_ranking_loss, save_lab, smooth_chord_intervals,
 )
 from reharmonize_models.btc import _collapse_predictions
 
@@ -48,3 +48,12 @@ def test_btc_predictions_become_intervals(tmp_path):
 
     output = save_lab(result, tmp_path / "nested" / "result.lab")
     assert output.read_text() == "0.000 0.200 C\n0.200 0.450 G\n"
+
+
+def test_smoothing_removes_short_chord_flicker():
+    chords = pd.DataFrame(
+        [(0.0, 1.0, "E"), (1.0, 1.2, "E:maj7"), (1.2, 2.0, "E")],
+        columns=["start", "end", "chord"],
+    )
+    result = smooth_chord_intervals(chords, minimum_duration=0.35)
+    assert result.to_dict("records") == [{"start": 0.0, "end": 2.0, "chord": "E"}]
