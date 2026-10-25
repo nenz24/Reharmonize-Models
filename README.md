@@ -27,3 +27,27 @@ uv run jupyter nbconvert --to notebook --execute --inplace \
 The notebook uses BTC's bundled example recording and limits melody extraction to 30 seconds for a
 fast CPU smoke test. BTC retains its upstream MIT license. Confirm the terms of any audio,
 annotations, arrangements, or feedback before using them for training or distribution.
+
+## Detect chords from audio
+
+Put local recordings in `data/` (the directory is ignored by Git), then run:
+
+```bash
+uv run reharmonize-detect data/song.mp3 --output artifacts/song.lab
+```
+
+The command loads the published large-vocabulary BTC checkpoint and writes timestamped chord
+intervals. From Python or a notebook, the same operation is available as:
+
+```python
+from reharmonize_models import detect_chords
+
+chords = detect_chords("data/song.mp3")
+```
+
+For a visual end-to-end analysis, open `notebooks/02_btc_audio_analysis.ipynb`. To choose a local
+recording without editing the notebook, start Jupyter with:
+
+```bash
+AUDIO_PATH=data/song.mp3 uv run jupyter lab
+```

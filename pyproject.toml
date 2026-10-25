@@ -19,6 +19,9 @@ dependencies = [
   "torchcrepe>=0.0.24",
 ]
 
+[project.scripts]
+reharmonize-detect = "reharmonize_models.btc:main"
+
 [dependency-groups]
 dev = ["pytest>=8.3"]
 
