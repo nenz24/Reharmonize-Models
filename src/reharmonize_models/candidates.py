@@ -121,6 +121,10 @@ def create_candidate_sheet(
                 "next_chord": following,
                 "candidate": candidate,
                 "display_order": display_order,
+                **{
+                    f"melody_pc_{pitch}": float(segment.melody_profile[pitch])
+                    for pitch in range(12)
+                },
                 **features,
                 "preferred": "",
             })

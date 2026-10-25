@@ -24,6 +24,7 @@ dependencies = [
 [project.scripts]
 reharmonize-detect = "reharmonize_models.btc:main"
 reharmonize-separate = "reharmonize_models.separation:main"
+reharmonize-train = "reharmonize_models.training:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3"]

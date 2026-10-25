@@ -6,7 +6,7 @@ from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, chord_pitch_classes,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
-    smooth_chord_intervals,
+    smooth_chord_intervals, train_ranker,
 )
 from reharmonize_models.btc import _collapse_predictions
 
@@ -87,3 +87,24 @@ def test_key_estimation_and_candidate_sheet():
     assert set(sheet.groupby("segment_id").size()) == {6}
     assert set(segments.chord) - {"N", "X"} <= set(sheet.candidate)
     assert set(sheet.key) == {"E:maj"}
+
+
+def test_labeled_candidates_train_checkpoint(tmp_path):
+    chords = pd.DataFrame(
+        [(0.0, 2.0, "E"), (2.0, 4.0, "A")], columns=["start", "end", "chord"]
+    )
+    segments = chords.copy()
+    segments["melody_profile"] = [np.eye(12, dtype=np.float32)[4]] * 2
+    segments["voiced_frames"] = 40
+    sheet = create_candidate_sheet(segments, key="E:maj", max_candidates=4)
+    sheet["preferred"] = 0
+    sheet.loc[sheet.groupby("segment_id").head(1).index, "preferred"] = 1
+    csv_path = tmp_path / "preferences.csv"
+    checkpoint = tmp_path / "ranker.pt"
+    sheet.to_csv(csv_path, index=False)
+    metrics = train_ranker([csv_path], checkpoint, epochs=3)
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    assert metrics["training_pairs"] == 6
+    assert np.isfinite(metrics["final_loss"])
+    assert saved["context_size"] == 66
+    assert saved["candidate_size"] == 28

@@ -79,3 +79,13 @@ After notebook 03, run `notebooks/04_candidate_labeling.ipynb`. It estimates the
 chord tones from extensions and semitone proximity, and exports `data/song-preferences.csv`. For
 each `segment_id`, mark exactly one candidate as `preferred=1` and the remaining candidates as
 `preferred=0`. These labels become preferred/rejected pairs for training the neural ranker.
+
+Train a checkpoint after labeling one or more songs:
+
+```bash
+uv run reharmonize-train data/song-preferences.csv --output artifacts/chord-ranker.pt
+```
+
+The command rejects incomplete labeled segments, builds pairwise preferred/rejected examples, and
+prints training loss and accuracy. Training on a single song is only a pipeline check; a useful
+model needs labels from multiple songs and evaluation split by song and artist.
