@@ -17,6 +17,7 @@ scores require preferred/rejected candidates from licensed arrangements or music
 ```bash
 git clone --recurse-submodules https://github.com/nenz24/Reharmonize-Models.git
 cd Reharmonize-Models
+brew install uv # macOS only; skip when uv is already installed
 UV_CACHE_DIR=/tmp/reharmonize-uv-cache uv sync
 uv run pytest
 uv run jupyter nbconvert --to notebook --execute --inplace \
