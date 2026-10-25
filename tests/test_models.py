@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 import torch
+import soundfile as sf
 
 from reharmonize_models import (
-    ChordCandidateRanker, aggregate_melody_by_chord, chord_pitch_classes,
+    ChordCandidateRanker, aggregate_melody_by_chord, build_manifest, chord_pitch_classes,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
     smooth_chord_intervals, train_ranker,
@@ -108,3 +109,30 @@ def test_labeled_candidates_train_checkpoint(tmp_path):
     assert np.isfinite(metrics["final_loss"])
     assert saved["context_size"] == 66
     assert saved["candidate_size"] == 28
+
+
+def test_manifest_generation_groups_versions_and_preserves_metadata(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    audio_root = tmp_path / "data" / "audio"
+    work = audio_root / "amazing-grace"
+    work.mkdir(parents=True)
+    sample_rate = 8_000
+    sf.write(work / "acoustic.wav", np.zeros(sample_rate), sample_rate)
+    sf.write(work / "gospel.wav", np.ones(sample_rate) * 0.01, sample_rate)
+    manifest_path = tmp_path / "data" / "manifest.csv"
+
+    summary = build_manifest(audio_root, manifest_path)
+    manifest = pd.read_csv(manifest_path)
+    assert summary == {
+        "audio_files": 2, "manifest_tracks": 2, "works": 1,
+        "duplicates_skipped": 0, "unreadable": 0,
+    }
+    assert manifest.work_id.nunique() == 1
+    assert manifest.track_id.nunique() == 2
+    assert set(manifest.primary_genre) == {"unknown"}
+
+    manifest.loc[manifest.index[0], "primary_genre"] = "worship"
+    manifest.to_csv(manifest_path, index=False)
+    build_manifest(audio_root, manifest_path)
+    refreshed = pd.read_csv(manifest_path)
+    assert refreshed.loc[refreshed.track_id == manifest.iloc[0].track_id, "primary_genre"].item() == "worship"

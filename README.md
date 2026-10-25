@@ -89,3 +89,25 @@ uv run reharmonize-train data/song-preferences.csv --output artifacts/chord-rank
 The command rejects incomplete labeled segments, builds pairwise preferred/rejected examples, and
 prints training loss and accuracy. Training on a single song is only a pipeline check; a useful
 model needs labels from multiple songs and evaluation split by song and artist.
+
+## Build an audio dataset manifest
+
+Place audio files under one folder per composition. Multiple arrangements of the same composition
+belong in the same folder:
+
+```text
+data/audio/amazing-grace/acoustic.wav
+data/audio/amazing-grace/gospel.mp3
+data/audio/how-great-thou-art/original.mp3
+```
+
+Then generate the manifest:
+
+```bash
+uv run reharmonize-dataset
+```
+
+The command creates `data/manifest.csv` with stable track/work IDs, initial title and version,
+relative path, SHA-256, duration, and `unknown` genre. Re-running it preserves manual metadata edits,
+detects exact duplicate files, and adds newly discovered audio. Folder names group arrangements;
+the title itself is never used as the dataset identity.
