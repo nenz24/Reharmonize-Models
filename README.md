@@ -72,3 +72,10 @@ chords = smooth_chord_intervals(chords, minimum_duration=0.35)
 
 `notebooks/03_vocal_aware_analysis.ipynb` combines these steps for `data/song.mp3` and writes its
 vocal stem and smoothed chord labels under `artifacts/`.
+
+## Collect chord preferences
+
+After notebook 03, run `notebooks/04_candidate_labeling.ipynb`. It estimates the song key, separates
+chord tones from extensions and semitone proximity, and exports `data/song-preferences.csv`. For
+each `segment_id`, mark exactly one candidate as `preferred=1` and the remaining candidates as
+`preferred=0`. These labels become preferred/rejected pairs for training the neural ranker.

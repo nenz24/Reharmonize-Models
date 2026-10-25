@@ -17,6 +17,16 @@ _QUALITIES = {
 }
 
 
+def chord_root_pitch_class(symbol: str) -> int | None:
+    """Return the root pitch class of a Harte-style chord symbol."""
+    if symbol in {"N", "X"} or not symbol or symbol[0] not in _ROOTS:
+        return None
+    root = _ROOTS[symbol[0]]
+    if len(symbol) > 1 and symbol[1] in {"#", "b"}:
+        root += 1 if symbol[1] == "#" else -1
+    return root % 12
+
+
 def melody_pitch_track(audio_path: str | Path, *, duration: float | None = None,
                        sample_rate: int = 16_000, hop_length: int = 160,
                        periodicity_threshold: float = 0.5) -> pd.DataFrame:
@@ -74,8 +84,50 @@ def chord_pitch_classes(symbol: str) -> set[int]:
 
 
 def melody_clash_score(profile: np.ndarray, candidate_symbol: str) -> float:
-    """Weighted share of melody outside the candidate chord; zero is fully compatible."""
+    """Weighted share of melody outside the chord (a diagnostic, not a rejection rule)."""
     tones, values = chord_pitch_classes(candidate_symbol), np.asarray(profile)
     if not tones or values.sum() <= 0:
         return 0.0
     return float(np.clip(1 - values[list(tones)].sum() / values.sum(), 0, 1))
+
+
+def melody_compatibility_features(
+    profile: np.ndarray,
+    candidate_symbol: str,
+    *,
+    voiced_frames: int = 0,
+    duration: float | None = None,
+    frame_rate: float = 100.0,
+) -> dict[str, float]:
+    """Describe melody/chord interaction without treating every extension as a clash."""
+    values = np.asarray(profile, dtype=np.float64)
+    if values.shape != (12,):
+        raise ValueError("profile must contain 12 pitch-class weights")
+    total = float(values.sum())
+    if total > 0:
+        values = values / total
+
+    tones = chord_pitch_classes(candidate_symbol)
+    if not tones or total <= 0:
+        chord_tone = semitone = extension = 0.0
+    else:
+        tone_indexes = np.array(sorted(tones), dtype=np.int64)
+        distances = np.array([
+            min(min((pitch - tone) % 12, (tone - pitch) % 12) for tone in tones)
+            for pitch in range(12)
+        ])
+        chord_tone = float(values[tone_indexes].sum())
+        semitone = float(values[distances == 1].sum())
+        extension = float(values[distances >= 2].sum())
+
+    voiced_fraction = 0.0
+    if duration is not None and duration > 0:
+        voiced_fraction = float(np.clip(voiced_frames / (duration * frame_rate), 0, 1))
+    evidence = float(np.clip(voiced_frames / 20.0, 0, 1))
+    return {
+        "chord_tone_ratio": chord_tone,
+        "semitone_proximity_ratio": semitone,
+        "extension_ratio": extension,
+        "voiced_fraction": voiced_fraction,
+        "evidence": evidence,
+    }

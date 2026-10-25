@@ -4,7 +4,9 @@ import torch
 
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, chord_pitch_classes,
-    melody_clash_score, pairwise_ranking_loss, save_lab, smooth_chord_intervals,
+    create_candidate_sheet, estimate_key, melody_clash_score,
+    melody_compatibility_features, pairwise_ranking_loss, save_lab,
+    smooth_chord_intervals,
 )
 from reharmonize_models.btc import _collapse_predictions
 
@@ -57,3 +59,31 @@ def test_smoothing_removes_short_chord_flicker():
     )
     result = smooth_chord_intervals(chords, minimum_duration=0.35)
     assert result.to_dict("records") == [{"start": 0.0, "end": 2.0, "chord": "E"}]
+
+
+def test_compatibility_separates_extensions_from_semitones():
+    extension = np.zeros(12, dtype=np.float32)
+    extension[6] = 1  # F# is the ninth over E.
+    nearby = np.zeros(12, dtype=np.float32)
+    nearby[7] = 1  # G is one semitone from E's major third.
+    extension_features = melody_compatibility_features(extension, "E", voiced_frames=20, duration=1)
+    nearby_features = melody_compatibility_features(nearby, "E", voiced_frames=20, duration=1)
+    assert extension_features["extension_ratio"] == 1
+    assert extension_features["semitone_proximity_ratio"] == 0
+    assert nearby_features["semitone_proximity_ratio"] == 1
+    assert extension_features["evidence"] == 1
+
+
+def test_key_estimation_and_candidate_sheet():
+    chords = pd.DataFrame(
+        [(0.0, 4.0, "E"), (4.0, 6.0, "A"), (6.0, 8.0, "B:7"), (8.0, 12.0, "E")],
+        columns=["start", "end", "chord"],
+    )
+    assert estimate_key(chords) == "E:maj"
+    segments = chords.copy()
+    segments["melody_profile"] = [np.eye(12, dtype=np.float32)[4]] * len(segments)
+    segments["voiced_frames"] = 40
+    sheet = create_candidate_sheet(segments, max_candidates=6)
+    assert set(sheet.groupby("segment_id").size()) == {6}
+    assert set(segments.chord) - {"N", "X"} <= set(sheet.candidate)
+    assert set(sheet.key) == {"E:maj"}
