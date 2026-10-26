@@ -91,7 +91,9 @@ def preprocess_manifest(
     errors: list[dict[str, str]] = []
     windows: list[dict[str, object]] = []
 
-    for row in manifest.itertuples(index=False):
+    total_tracks = len(manifest)
+    for position, row in enumerate(manifest.itertuples(index=False), start=1):
+        print(f"[{position}/{total_tracks}] {row.track_id} ({row.work_id})", flush=True)
         track_dir = output_root / str(row.track_id)
         metadata_path = track_dir / "metadata.json"
         signature = {
@@ -102,6 +104,7 @@ def preprocess_manifest(
         if metadata_path.exists() and not force:
             old = json.loads(metadata_path.read_text())
             if old.get("signature") == signature and old.get("status") == "complete":
+                print("  cached: complete", flush=True)
                 skipped += 1
                 processed_duration = float(old["processed_duration"])
                 for start in np.arange(0, processed_duration, 30.0):
@@ -114,6 +117,7 @@ def preprocess_manifest(
         track_dir.mkdir(parents=True, exist_ok=True)
         audio_path = _resolve_audio_path(str(row.audio_path), manifest_path)
         try:
+            print("  BTC: detecting chords", flush=True)
             if detector is None:
                 detector = BTCChordDetector()
             raw_chords = detector.detect(audio_path, duration=max_duration)
@@ -121,12 +125,14 @@ def preprocess_manifest(
             save_lab(raw_chords, track_dir / "chords.raw.lab")
             save_lab(chords, track_dir / "chords.lab")
 
+            print("  HDemucs: separating vocals", flush=True)
             if separator is None:
                 separator = VocalSeparator()
             vocals_path = separator.separate(
                 audio_path, track_dir / "vocals.wav", duration=max_duration
             )
             processed_duration = float(chords.end.max())
+            print("  CREPE: extracting melody", flush=True)
             melody = melody_pitch_track(vocals_path, duration=processed_duration)
             _save_melody(melody, track_dir / "melody.npz")
             segments = aggregate_melody_by_chord(chords, melody)
@@ -144,6 +150,7 @@ def preprocess_manifest(
                 "status": "complete",
             }
             metadata_path.write_text(json.dumps(metadata, indent=2))
+            print("  complete", flush=True)
             for start in np.arange(0, processed_duration, 30.0):
                 windows.append({
                     "track_id": row.track_id, "work_id": row.work_id,
@@ -152,6 +159,7 @@ def preprocess_manifest(
                 })
             completed += 1
         except Exception as error:
+            print(f"  failed: {error!r}", flush=True)
             failed += 1
             errors.append({"track_id": str(row.track_id), "error": repr(error)})
             metadata_path.write_text(json.dumps({
