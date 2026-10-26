@@ -269,6 +269,11 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
     assert "N" not in set(suggestions.candidate_chord)
     midi_path = render_suggestion_midi(suggestions_path, tmp_path / "suggestions.mid")
     assert midi_path.stat().st_size > 0
+    source_midi = render_suggestion_midi(
+        suggestions_path, tmp_path / "source.mid", source_only=True
+    )
+    assert source_midi.stat().st_size > 0
+    assert midi_path.read_bytes() != source_midi.read_bytes()
 
 
 def test_masked_chord_model_and_transposition_are_shape_safe():

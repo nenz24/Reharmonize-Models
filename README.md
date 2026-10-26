@@ -215,11 +215,16 @@ uv run reharmonize-suggest \
   --track-id track-0001 \
   --top-k 5 \
   --output artifacts/track-0001-suggestions.csv \
-  --midi-output artifacts/track-0001-rank1.mid
+  --midi-output artifacts/track-0001-variation.mid \
+  --source-midi-output artifacts/track-0001-source.mid \
+  --change-rate 0.1
 ```
 
 By default, silent `N` source segments are skipped and `N` is not offered as an alternative. The
 CSV includes model probability plus chord-tone, semitone-proximity, extension, and vocal-evidence
-diagnostics. The MIDI renders rank one as close-position piano chords at the source timestamps, so
-it can be imported into a DAW and auditioned with the original recording. These alternatives are
-not yet conditioned on a requested genre or arrangement style.
+diagnostics. The source MIDI renders the BTC progression. The variation MIDI replaces roughly ten
+percent of its segments with rank one, prioritizes model confidence and low semitone proximity, and
+keeps changed segments more than four chord boundaries apart. This preserves the original context
+used for each masked prediction. Import both MIDI files into a DAW with the original recording for
+an A/B listening review. These alternatives are not yet conditioned on a requested genre or
+arrangement style.

@@ -174,20 +174,43 @@ def render_suggestion_midi(
     *,
     rank: int = 1,
     velocity: int = 72,
+    change_rate: float = 0.1,
+    minimum_segment_gap: int = 4,
+    source_only: bool = False,
 ) -> Path:
-    """Render one suggestion rank as simple close-position piano chords."""
+    """Render a sparse variation while keeping the model's original chord context intact."""
+    if not 0 <= change_rate <= 1:
+        raise ValueError("change_rate must be between 0 and 1")
+    if minimum_segment_gap < 0:
+        raise ValueError("minimum_segment_gap cannot be negative")
     suggestions_path = Path(suggestions_path).expanduser().resolve()
     output_path = Path(output_path).expanduser().resolve()
     suggestions = pd.read_csv(suggestions_path)
     selected = suggestions[suggestions["rank"] == rank].sort_values("start")
     if selected.empty:
         raise ValueError(f"No rank {rank} suggestions were found")
+    changed_positions: set[int] = set()
+    if not source_only and change_rate > 0:
+        target_changes = max(1, round(len(selected) * change_rate))
+        selection_score = np.log(np.maximum(selected.probability.to_numpy(), 1e-12))
+        if "semitone_proximity_ratio" in selected:
+            selection_score -= selected.semitone_proximity_ratio.to_numpy()
+        for position in np.argsort(selection_score)[::-1]:
+            position = int(position)
+            if any(abs(position - other) <= minimum_segment_gap for other in changed_positions):
+                continue
+            changed_positions.add(position)
+            if len(changed_positions) == target_changes:
+                break
     midi = pretty_midi.PrettyMIDI()
     piano = pretty_midi.Instrument(
         program=pretty_midi.instrument_name_to_program("Acoustic Grand Piano")
     )
-    for row in selected.itertuples(index=False):
-        symbol = str(row.candidate_chord)
+    for position, row in enumerate(selected.itertuples(index=False)):
+        symbol = (
+            str(row.candidate_chord)
+            if position in changed_positions else str(row.source_chord)
+        )
         root = chord_root_pitch_class(symbol)
         tones = chord_pitch_classes(symbol)
         if root is None or not tones:
@@ -215,6 +238,8 @@ def main() -> None:
     parser.add_argument("--include-source", action="store_true")
     parser.add_argument("--include-no-chord", action="store_true")
     parser.add_argument("--midi-output", type=Path)
+    parser.add_argument("--source-midi-output", type=Path)
+    parser.add_argument("--change-rate", type=float, default=0.1)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
     summary = generate_chord_suggestions(
@@ -223,7 +248,14 @@ def main() -> None:
         include_no_chord=args.include_no_chord, device=args.device,
     )
     if args.midi_output:
-        summary["midi"] = str(render_suggestion_midi(args.output, args.midi_output))
+        summary["midi"] = str(render_suggestion_midi(
+            args.output, args.midi_output, change_rate=args.change_rate
+        ))
+        summary["change_rate"] = args.change_rate
+    if args.source_midi_output:
+        summary["source_midi"] = str(render_suggestion_midi(
+            args.output, args.source_midi_output, source_only=True
+        ))
     print(json.dumps(summary, indent=2))
 
 
