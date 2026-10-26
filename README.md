@@ -221,6 +221,7 @@ uv run reharmonize-suggest \
   --preview-output artifacts/track-0001-variation-preview.wav \
   --review-output artifacts/track-0001-ab-review.wav \
   --review-count 5 \
+  --review-stem vocals \
   --change-rate 0.1
 ```
 
@@ -237,4 +238,6 @@ a requested genre or arrangement style.
 The compact A/B review makes subtle replacements easier to hear. For each of the five strongest
 changes, one beep introduces the source chord excerpt and two beeps introduce the variation of the
 same excerpt. Chords are mixed louder than in the full-song previews. A CSV beside the review WAV
-records the playback order, original timestamp, source chord, and candidate chord.
+records the playback order, original timestamp, source chord, and candidate chord. Vocal-only review
+is the default because mixing suggestions over the original accompaniment plays two harmonies at
+once and biases both alternatives. Use `--review-stem original` only to diagnose alignment.

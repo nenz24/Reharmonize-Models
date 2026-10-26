@@ -319,6 +319,9 @@ def render_ab_review(
     audio = np.pad(audio, (0, length - len(audio)))
     source = np.pad(source, (0, length - len(source)))
     variation = np.pad(variation, (0, length - len(variation)))
+    audio_peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if audio_peak > 0:
+        audio /= audio_peak
     for chord_audio in (source, variation):
         peak = float(np.max(np.abs(chord_audio))) if len(chord_audio) else 0.0
         if peak > 0:
@@ -393,6 +396,8 @@ def main() -> None:
     parser.add_argument("--preview-output", type=Path)
     parser.add_argument("--review-output", type=Path)
     parser.add_argument("--review-count", type=int, default=5)
+    parser.add_argument("--review-stem", choices=["vocals", "original"], default="vocals")
+    parser.add_argument("--processed-root", type=Path, default=Path("data/processed"))
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
     summary = generate_chord_suggestions(
@@ -428,13 +433,24 @@ def main() -> None:
                 raise ValueError(
                     "--review-output requires --source-midi-output and --midi-output"
                 )
+            review_audio = audio_path
+            if args.review_stem == "vocals":
+                review_audio = (
+                    args.processed_root.expanduser().resolve() / args.track_id / "vocals.wav"
+                )
+                if not review_audio.is_file():
+                    raise FileNotFoundError(
+                        f"Vocal stem not found: {review_audio}. Use --review-stem original "
+                        "or check --processed-root."
+                    )
             review_path, plan_path = render_ab_review(
-                audio_path, args.source_midi_output, args.midi_output, args.output,
+                review_audio, args.source_midi_output, args.midi_output, args.output,
                 args.review_output, change_rate=args.change_rate,
                 review_count=args.review_count,
             )
             summary["review"] = str(review_path)
             summary["review_plan"] = str(plan_path)
+            summary["review_stem"] = args.review_stem
     print(json.dumps(summary, indent=2))
 
 
