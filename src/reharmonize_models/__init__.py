@@ -14,7 +14,7 @@ from .pretraining import (
 )
 from .pretraining_data import build_pretraining_dataset, chord_quality
 from .separation import VocalSeparator, separate_vocals
-from .suggestions import generate_chord_suggestions
+from .suggestions import generate_chord_suggestions, render_suggestion_midi
 from .training import preference_pairs, train_ranker
 
 __all__ = [
@@ -28,6 +28,6 @@ __all__ = [
     "generate_chord_suggestions",
     "melody_compatibility_features", "melody_pitch_track", "pairwise_ranking_loss",
     "preference_pairs", "preprocess_manifest", "save_lab", "separate_vocals",
-    "evaluate_masked_chord_checkpoint", "smooth_chord_intervals",
+    "evaluate_masked_chord_checkpoint", "render_suggestion_midi", "smooth_chord_intervals",
     "train_masked_chord_model", "train_ranker", "transpose_batch",
 ]

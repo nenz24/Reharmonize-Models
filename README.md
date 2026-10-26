@@ -214,9 +214,12 @@ uv run reharmonize-suggest \
   --checkpoint artifacts/masked-chord-model-balanced.pt \
   --track-id track-0001 \
   --top-k 5 \
-  --output artifacts/track-0001-suggestions.csv
+  --output artifacts/track-0001-suggestions.csv \
+  --midi-output artifacts/track-0001-rank1.mid
 ```
 
-The probability is the model's normalized joint root-and-quality confidence. These alternatives
-are suitable for listening review and later reranking; they are not yet conditioned on a requested
-genre or arrangement style.
+By default, silent `N` source segments are skipped and `N` is not offered as an alternative. The
+CSV includes model probability plus chord-tone, semitone-proximity, extension, and vocal-evidence
+diagnostics. The MIDI renders rank one as close-position piano chords at the source timestamps, so
+it can be imported into a DAW and auditioned with the original recording. These alternatives are
+not yet conditioned on a requested genre or arrangement style.

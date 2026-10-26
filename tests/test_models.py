@@ -8,6 +8,7 @@ from reharmonize_models import (
     build_quality_report, chord_pitch_classes,
     build_pretraining_dataset, calculate_pretraining_baselines, chord_quality,
     evaluate_masked_chord_checkpoint, generate_chord_suggestions, MaskedChordModel,
+    render_suggestion_midi,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
     preprocess_manifest, smooth_chord_intervals, train_masked_chord_model, train_ranker,
@@ -260,9 +261,14 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
     )
     suggestions = pd.read_csv(suggestions_path)
     assert suggestion_summary["segments"] == 2
-    assert len(suggestions) == 6
+    assert suggestion_summary["suggested_segments"] == 1
+    assert len(suggestions) == 3
     assert not (suggestions.source_chord == suggestions.candidate_chord).any()
     assert set(suggestions.groupby("start").size()) == {3}
+    assert "semitone_proximity_ratio" in suggestions
+    assert "N" not in set(suggestions.candidate_chord)
+    midi_path = render_suggestion_midi(suggestions_path, tmp_path / "suggestions.mid")
+    assert midi_path.stat().st_size > 0
 
 
 def test_masked_chord_model_and_transposition_are_shape_safe():

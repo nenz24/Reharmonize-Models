@@ -6,8 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pretty_midi
 import torch
 
+from .features import chord_pitch_classes, chord_root_pitch_class, melody_compatibility_features
 from .pretraining import MaskedChordModel
 
 _ROOT_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
@@ -20,11 +22,15 @@ def _symbol(root: int, quality: str) -> str:
     return name if quality == "maj" else f"{name}:{quality}"
 
 
-def _valid_candidates(qualities: list[str]) -> list[tuple[int, int, str]]:
+def _valid_candidates(
+    qualities: list[str], *, include_no_chord: bool = False,
+) -> list[tuple[int, int, str]]:
     candidates: list[tuple[int, int, str]] = []
     for root in range(13):
         for quality_id, quality in enumerate(qualities):
             if (root == 12) != (quality == "N"):
+                continue
+            if root == 12 and not include_no_chord:
                 continue
             candidates.append((root, quality_id, _symbol(root, quality)))
     return candidates
@@ -38,6 +44,7 @@ def generate_chord_suggestions(
     track_id: str,
     top_k: int = 5,
     include_source: bool = False,
+    include_no_chord: bool = False,
     device: str = "auto",
 ) -> dict[str, object]:
     """Generate reviewable chord alternatives for every segment of one cached track."""
@@ -83,7 +90,7 @@ def generate_chord_suggestions(
         raise ValueError(f"track_id {track_id!r} was not found in the pretraining dataset")
     arrays = {name: np.concatenate(parts) for name, parts in selected.items()}
     qualities = list(vocabulary["qualities"])
-    candidates = _valid_candidates(qualities)
+    candidates = _valid_candidates(qualities, include_no_chord=include_no_chord)
     candidate_roots = np.asarray([item[0] for item in candidates], dtype=np.int64)
     candidate_qualities = np.asarray([item[1] for item in candidates], dtype=np.int64)
 
@@ -98,7 +105,10 @@ def generate_chord_suggestions(
         quality_probability = quality_logits.softmax(dim=1).cpu().numpy()
 
     rows: list[dict[str, object]] = []
+    center = arrays["root_input"].shape[1] // 2
     for index in range(len(arrays["target_root"])):
+        if int(arrays["target_root"][index]) == 12 and not include_no_chord:
+            continue
         source = _symbol(
             int(arrays["target_root"][index]),
             qualities[int(arrays["target_quality"][index])],
@@ -109,21 +119,36 @@ def generate_chord_suggestions(
         )
         probability /= max(float(probability.sum()), 1e-12)
         order = np.argsort(probability)[::-1]
+        start = float(arrays["start"][index])
+        if index + 1 < len(arrays["start"]):
+            end = float(arrays["start"][index + 1])
+        else:
+            normalized_duration = float(arrays["scalars"][index, center, 0])
+            end = start + float(np.expm1(normalized_duration * np.log(11.0)))
+        duration = max(end - start, 1e-3)
+        voiced_fraction = float(arrays["scalars"][index, center, 1])
+        voiced_frames = int(round(voiced_fraction * duration * 100.0))
+        melody_profile = arrays["melody"][index, center]
         rank = 0
         for candidate_index in order:
             candidate = candidates[int(candidate_index)][2]
             if not include_source and candidate == source:
                 continue
             rank += 1
+            compatibility = melody_compatibility_features(
+                melody_profile, candidate, voiced_frames=voiced_frames, duration=duration
+            )
             rows.append({
                 "track_id": track_id,
                 "work_id": str(arrays["work_id"][index]),
                 "split": selected_split,
-                "start": round(float(arrays["start"][index]), 3),
+                "start": round(start, 3),
+                "end": round(end, 3),
                 "source_chord": source,
                 "rank": rank,
                 "candidate_chord": candidate,
                 "probability": float(probability[int(candidate_index)]),
+                **compatibility,
             })
             if rank == top_k:
                 break
@@ -133,12 +158,51 @@ def generate_chord_suggestions(
         "track_id": track_id,
         "split": selected_split,
         "segments": len(arrays["target_root"]),
+        "suggested_segments": len(rows) // top_k,
         "suggestions": len(rows),
         "top_k": top_k,
         "include_source": include_source,
+        "include_no_chord": include_no_chord,
         "checkpoint": str(checkpoint_path),
         "output": str(output_path),
     }
+
+
+def render_suggestion_midi(
+    suggestions_path: str | Path,
+    output_path: str | Path,
+    *,
+    rank: int = 1,
+    velocity: int = 72,
+) -> Path:
+    """Render one suggestion rank as simple close-position piano chords."""
+    suggestions_path = Path(suggestions_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    suggestions = pd.read_csv(suggestions_path)
+    selected = suggestions[suggestions["rank"] == rank].sort_values("start")
+    if selected.empty:
+        raise ValueError(f"No rank {rank} suggestions were found")
+    midi = pretty_midi.PrettyMIDI()
+    piano = pretty_midi.Instrument(
+        program=pretty_midi.instrument_name_to_program("Acoustic Grand Piano")
+    )
+    for row in selected.itertuples(index=False):
+        symbol = str(row.candidate_chord)
+        root = chord_root_pitch_class(symbol)
+        tones = chord_pitch_classes(symbol)
+        if root is None or not tones:
+            continue
+        root_midi = 48 + root
+        pitches = [root_midi + ((pitch_class - root) % 12) for pitch_class in tones]
+        for pitch in sorted(pitches):
+            piano.notes.append(pretty_midi.Note(
+                velocity=velocity, pitch=int(pitch),
+                start=float(row.start), end=max(float(row.end), float(row.start) + 0.05),
+            ))
+    midi.instruments.append(piano)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    midi.write(str(output_path))
+    return output_path
 
 
 def main() -> None:
@@ -149,12 +213,17 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("artifacts/chord-suggestions.csv"))
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--include-source", action="store_true")
+    parser.add_argument("--include-no-chord", action="store_true")
+    parser.add_argument("--midi-output", type=Path)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
     summary = generate_chord_suggestions(
         args.dataset_root, args.checkpoint, args.output, track_id=args.track_id,
-        top_k=args.top_k, include_source=args.include_source, device=args.device,
+        top_k=args.top_k, include_source=args.include_source,
+        include_no_chord=args.include_no_chord, device=args.device,
     )
+    if args.midi_output:
+        summary["midi"] = str(render_suggestion_midi(args.output, args.midi_output))
     print(json.dumps(summary, indent=2))
 
 
