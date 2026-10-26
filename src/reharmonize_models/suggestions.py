@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import itertools
 import json
 from pathlib import Path
 
@@ -37,6 +38,44 @@ def _valid_candidates(
                 continue
             candidates.append((root, quality_id, _symbol(root, quality)))
     return candidates
+
+
+def _best_voicing(
+    symbol: str,
+    previous: list[int] | None = None,
+    following: list[int] | None = None,
+) -> list[int]:
+    """Choose a compact inversion with minimal movement around middle C."""
+    root = chord_root_pitch_class(symbol)
+    tones = chord_pitch_classes(symbol)
+    if root is None or not tones:
+        return []
+    pitch_options = [
+        [pitch for pitch in range(48, 73) if pitch % 12 == pitch_class]
+        for pitch_class in sorted(tones)
+    ]
+    candidates = [
+        sorted(voicing) for voicing in itertools.product(*pitch_options)
+        if len(set(voicing)) == len(voicing) and max(voicing) - min(voicing) <= 19
+    ]
+
+    def movement(voicing: list[int], reference: list[int] | None) -> float:
+        if not reference:
+            return 0.0
+        forward = sum(min(abs(pitch - other) for other in reference) for pitch in voicing)
+        backward = sum(min(abs(pitch - other) for other in voicing) for pitch in reference)
+        return forward + backward + 0.35 * abs(min(voicing) - min(reference))
+
+    def score(voicing: list[int]) -> float:
+        register = 0.08 * sum(abs(pitch - 60) for pitch in voicing)
+        spread = 0.04 * (max(voicing) - min(voicing))
+        inversion = 0.4 if min(voicing) % 12 != root else 0.0
+        return (
+            movement(voicing, previous) + movement(voicing, following)
+            + register + spread + inversion
+        )
+
+    return min(candidates, key=score)
 
 
 def generate_chord_suggestions(
@@ -199,18 +238,25 @@ def render_suggestion_midi(
     piano = pretty_midi.Instrument(
         program=pretty_midi.instrument_name_to_program("Acoustic Grand Piano")
     )
-    for position, row in enumerate(selected.itertuples(index=False)):
-        symbol = (
-            str(row.candidate_chord)
-            if position in changed_positions else str(row.source_chord)
-        )
-        root = chord_root_pitch_class(symbol)
-        tones = chord_pitch_classes(symbol)
-        if root is None or not tones:
-            continue
-        root_midi = 48 + root
-        pitches = [root_midi + ((pitch_class - root) % 12) for pitch_class in tones]
-        for pitch in sorted(pitches):
+    selected_rows = list(selected.itertuples(index=False))
+    source_voicings: list[list[int]] = []
+    previous_voicing: list[int] | None = None
+    for row in selected_rows:
+        voicing = _best_voicing(str(row.source_chord), previous_voicing)
+        source_voicings.append(voicing)
+        if voicing:
+            previous_voicing = voicing
+
+    for position, row in enumerate(selected_rows):
+        pitches = source_voicings[position]
+        if position in changed_positions:
+            previous = source_voicings[position - 1] if position > 0 else None
+            following = (
+                source_voicings[position + 1]
+                if position + 1 < len(source_voicings) else None
+            )
+            pitches = _best_voicing(str(row.candidate_chord), previous, following)
+        for pitch in pitches:
             piano.notes.append(pretty_midi.Note(
                 velocity=velocity, pitch=int(pitch),
                 start=float(row.start), end=max(float(row.end), float(row.start) + 0.05),

@@ -15,6 +15,7 @@ from reharmonize_models import (
     transpose_batch,
 )
 from reharmonize_models.btc import _collapse_predictions
+from reharmonize_models.suggestions import _best_voicing
 
 
 def test_chord_parser_and_clash_score():
@@ -319,3 +320,11 @@ def test_masked_chord_model_and_transposition_are_shape_safe():
     )
     assert root_logits.shape == (2, 13)
     assert quality_logits.shape == (2, 2)
+
+
+def test_voicing_preserves_common_tones_and_limits_motion():
+    c_major = [48, 52, 55]
+    f_major = _best_voicing("F", c_major)
+    assert f_major == [48, 53, 57]
+    assert 48 in f_major  # Keep the shared C rather than jumping it by an octave.
+    assert max(f_major) - min(f_major) <= 19
