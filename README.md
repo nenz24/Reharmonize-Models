@@ -219,6 +219,8 @@ uv run reharmonize-suggest \
   --source-midi-output artifacts/track-0001-source.mid \
   --source-preview-output artifacts/track-0001-source-preview.wav \
   --preview-output artifacts/track-0001-variation-preview.wav \
+  --review-output artifacts/track-0001-ab-review.wav \
+  --review-count 5 \
   --change-rate 0.1
 ```
 
@@ -231,3 +233,8 @@ used for each masked prediction. Import both MIDI files into a DAW with the orig
 an A/B listening review. The two optional WAV outputs mix the synthesized chords with the original
 recording and can be opened directly without a DAW. These alternatives are not yet conditioned on
 a requested genre or arrangement style.
+
+The compact A/B review makes subtle replacements easier to hear. For each of the five strongest
+changes, one beep introduces the source chord excerpt and two beeps introduce the variation of the
+same excerpt. Chords are mixed louder than in the full-song previews. A CSV beside the review WAV
+records the playback order, original timestamp, source chord, and candidate chord.

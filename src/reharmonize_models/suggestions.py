@@ -191,19 +191,9 @@ def render_suggestion_midi(
     selected = suggestions[suggestions["rank"] == rank].sort_values("start")
     if selected.empty:
         raise ValueError(f"No rank {rank} suggestions were found")
-    changed_positions: set[int] = set()
-    if not source_only and change_rate > 0:
-        target_changes = max(1, round(len(selected) * change_rate))
-        selection_score = np.log(np.maximum(selected.probability.to_numpy(), 1e-12))
-        if "semitone_proximity_ratio" in selected:
-            selection_score -= selected.semitone_proximity_ratio.to_numpy()
-        for position in np.argsort(selection_score)[::-1]:
-            position = int(position)
-            if any(abs(position - other) <= minimum_segment_gap for other in changed_positions):
-                continue
-            changed_positions.add(position)
-            if len(changed_positions) == target_changes:
-                break
+    changed_positions = _select_change_positions(
+        selected, change_rate=change_rate, minimum_segment_gap=minimum_segment_gap
+    ) if not source_only else set()
     midi = pretty_midi.PrettyMIDI()
     piano = pretty_midi.Instrument(
         program=pretty_midi.instrument_name_to_program("Acoustic Grand Piano")
@@ -228,6 +218,49 @@ def render_suggestion_midi(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     midi.write(str(output_path))
     return output_path
+
+
+def _selection_scores(selected: pd.DataFrame) -> np.ndarray:
+    scores = np.log(np.maximum(selected.probability.to_numpy(), 1e-12))
+    if "semitone_proximity_ratio" in selected:
+        scores -= selected.semitone_proximity_ratio.to_numpy()
+    return scores
+
+
+def _select_change_positions(
+    selected: pd.DataFrame, *, change_rate: float, minimum_segment_gap: int,
+) -> set[int]:
+    if change_rate <= 0:
+        return set()
+    target_changes = max(1, round(len(selected) * change_rate))
+    changed_positions: set[int] = set()
+    for position in np.argsort(_selection_scores(selected))[::-1]:
+        position = int(position)
+        if any(abs(position - other) <= minimum_segment_gap for other in changed_positions):
+            continue
+        changed_positions.add(position)
+        if len(changed_positions) == target_changes:
+            break
+    return changed_positions
+
+
+def build_change_plan(
+    suggestions_path: str | Path,
+    *,
+    rank: int = 1,
+    change_rate: float = 0.1,
+    minimum_segment_gap: int = 4,
+) -> pd.DataFrame:
+    """Return the exact source-to-candidate replacements used by the variation MIDI."""
+    suggestions = pd.read_csv(Path(suggestions_path).expanduser().resolve())
+    selected = suggestions[suggestions["rank"] == rank].sort_values("start").reset_index(drop=True)
+    positions = _select_change_positions(
+        selected, change_rate=change_rate, minimum_segment_gap=minimum_segment_gap
+    )
+    plan = selected.iloc[sorted(positions)].copy()
+    scores = _selection_scores(selected)
+    plan["selection_score"] = [scores[position] for position in sorted(positions)]
+    return plan
 
 
 def render_mixed_audio_preview(
@@ -260,6 +293,75 @@ def render_mixed_audio_preview(
     return output_path
 
 
+def render_ab_review(
+    audio_path: str | Path,
+    source_midi_path: str | Path,
+    variation_midi_path: str | Path,
+    suggestions_path: str | Path,
+    output_path: str | Path,
+    *,
+    change_rate: float = 0.1,
+    review_count: int = 5,
+    context_seconds: float = 1.5,
+    sample_rate: int = 44_100,
+) -> tuple[Path, Path]:
+    """Create a compact, loud A/B reel for the strongest sparse chord replacements."""
+    if review_count < 1:
+        raise ValueError("review_count must be positive")
+    audio, _ = librosa.load(Path(audio_path).expanduser().resolve(), sr=sample_rate, mono=True)
+    source = pretty_midi.PrettyMIDI(str(Path(source_midi_path).expanduser().resolve())).synthesize(
+        fs=sample_rate
+    )
+    variation = pretty_midi.PrettyMIDI(
+        str(Path(variation_midi_path).expanduser().resolve())
+    ).synthesize(fs=sample_rate)
+    length = max(len(audio), len(source), len(variation))
+    audio = np.pad(audio, (0, length - len(audio)))
+    source = np.pad(source, (0, length - len(source)))
+    variation = np.pad(variation, (0, length - len(variation)))
+    for chord_audio in (source, variation):
+        peak = float(np.max(np.abs(chord_audio))) if len(chord_audio) else 0.0
+        if peak > 0:
+            chord_audio /= peak
+
+    plan = build_change_plan(suggestions_path, change_rate=change_rate)
+    plan = plan.sort_values("selection_score", ascending=False).head(review_count).copy()
+    plan.insert(0, "review_order", np.arange(1, len(plan) + 1))
+    chunks: list[np.ndarray] = []
+
+    def cue(beeps: int) -> np.ndarray:
+        beep_length = round(0.12 * sample_rate)
+        gap_length = round(0.10 * sample_rate)
+        wave = 0.25 * np.sin(2 * np.pi * 880 * np.arange(beep_length) / sample_rate)
+        parts: list[np.ndarray] = []
+        for _ in range(beeps):
+            parts.extend([wave, np.zeros(gap_length)])
+        parts.append(np.zeros(round(0.18 * sample_rate)))
+        return np.concatenate(parts)
+
+    def mix_clip(chords: np.ndarray, start: int, end: int) -> np.ndarray:
+        mixed = 0.52 * audio[start:end] + 0.46 * chords[start:end]
+        peak = float(np.max(np.abs(mixed))) if len(mixed) else 0.0
+        return mixed * (0.95 / peak) if peak > 0.95 else mixed
+
+    for row in plan.itertuples(index=False):
+        start_seconds = max(0.0, float(row.start) - context_seconds)
+        end_seconds = min(length / sample_rate, float(row.end) + context_seconds)
+        start = round(start_seconds * sample_rate)
+        end = round(end_seconds * sample_rate)
+        chunks.extend([
+            cue(1), mix_clip(source, start, end), np.zeros(round(0.45 * sample_rate)),
+            cue(2), mix_clip(variation, start, end), np.zeros(round(0.8 * sample_rate)),
+        ])
+    review_audio = np.concatenate(chunks) if chunks else np.zeros(sample_rate)
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(output_path, review_audio, sample_rate, subtype="PCM_16")
+    plan_path = output_path.with_suffix(".csv")
+    plan.to_csv(plan_path, index=False)
+    return output_path, plan_path
+
+
 def _manifest_audio_path(manifest_path: Path, track_id: str) -> Path:
     manifest = pd.read_csv(manifest_path)
     matching = manifest[manifest.track_id.astype(str) == track_id]
@@ -289,6 +391,8 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, default=Path("data/manifest.csv"))
     parser.add_argument("--source-preview-output", type=Path)
     parser.add_argument("--preview-output", type=Path)
+    parser.add_argument("--review-output", type=Path)
+    parser.add_argument("--review-count", type=int, default=5)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
     summary = generate_chord_suggestions(
@@ -305,7 +409,7 @@ def main() -> None:
         summary["source_midi"] = str(render_suggestion_midi(
             args.output, args.source_midi_output, source_only=True
         ))
-    if args.source_preview_output or args.preview_output:
+    if args.source_preview_output or args.preview_output or args.review_output:
         audio_path = _manifest_audio_path(args.manifest.expanduser().resolve(), args.track_id)
         if args.source_preview_output:
             if not args.source_midi_output:
@@ -319,6 +423,18 @@ def main() -> None:
             summary["preview"] = str(render_mixed_audio_preview(
                 audio_path, args.midi_output, args.preview_output
             ))
+        if args.review_output:
+            if not args.source_midi_output or not args.midi_output:
+                raise ValueError(
+                    "--review-output requires --source-midi-output and --midi-output"
+                )
+            review_path, plan_path = render_ab_review(
+                audio_path, args.source_midi_output, args.midi_output, args.output,
+                args.review_output, change_rate=args.change_rate,
+                review_count=args.review_count,
+            )
+            summary["review"] = str(review_path)
+            summary["review_plan"] = str(plan_path)
     print(json.dumps(summary, indent=2))
 
 
