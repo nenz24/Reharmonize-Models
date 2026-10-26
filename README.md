@@ -141,3 +141,33 @@ uv run reharmonize-qc \
 The report flags missing caches, duration mismatches, excessive `N` labels, unusually sparse or
 dense chord changes, and low vocal evidence. Flags request review; they do not automatically delete
 or exclude a track.
+
+## Self-supervised chord pretraining
+
+Once QC is reviewed, convert the cached features into masked-chord examples:
+
+```bash
+uv run reharmonize-build-pretraining \
+  --manifest data/manifest.csv \
+  --processed-root data/processed \
+  --output-root data/pretraining
+```
+
+Each example hides one chord and retains its vocal melody profile, duration, voicing evidence, and
+four neighboring chords on each side. Examples stay in the work-level split created during
+preprocessing. Inverse work-frequency weights stop compositions with more versions or chord
+segments from dominating the objective.
+
+Train the first self-supervised checkpoint with random pitch transposition:
+
+```bash
+uv run reharmonize-pretrain \
+  --dataset-root data/pretraining \
+  --output artifacts/masked-chord-model.pt \
+  --epochs 20
+```
+
+The trainer reports root, quality, and complete-chord accuracy on validation data after every
+epoch and saves the state with the lowest validation loss. Its final report also evaluates the
+held-out test works. This checkpoint learns a general harmony-and-melody representation; genre or
+arrangement controls can be added in a later fine-tuning stage without changing the base dataset.

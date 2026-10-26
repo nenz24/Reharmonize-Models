@@ -6,9 +6,11 @@ import soundfile as sf
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
     build_quality_report, chord_pitch_classes,
+    build_pretraining_dataset, chord_quality, MaskedChordModel,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
-    preprocess_manifest, smooth_chord_intervals, train_ranker,
+    preprocess_manifest, smooth_chord_intervals, train_masked_chord_model, train_ranker,
+    transpose_batch,
 )
 from reharmonize_models.btc import _collapse_predictions
 
@@ -192,3 +194,71 @@ def test_batch_preprocessing_is_resumable(tmp_path, monkeypatch):
     assert summary["missing_cache"] == 0
     assert report.loc[0, "no_chord_ratio"] == 0
     assert report.loc[0, "voiced_fraction"] == 0.01
+
+
+def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
+    manifest = pd.DataFrame([
+        {"track_id": "track-a", "work_id": "work-a", "status": "ready"},
+        {"track_id": "track-b", "work_id": "work-b", "status": "ready"},
+    ])
+    manifest_path = tmp_path / "manifest.csv"
+    manifest.to_csv(manifest_path, index=False)
+    processed = tmp_path / "processed"
+    for track, work, split, chords in [
+        ("track-a", "work-a", "train", ["C", "G:7", "C"]),
+        ("track-b", "work-b", "validation", ["F:min", "N"]),
+    ]:
+        track_dir = processed / track
+        track_dir.mkdir(parents=True)
+        (track_dir / "metadata.json").write_text(__import__("json").dumps({
+            "status": "complete", "split": split,
+        }))
+        count = len(chords)
+        np.savez_compressed(
+            track_dir / "features.npz",
+            start=np.arange(count, dtype=np.float32),
+            end=np.arange(1, count + 1, dtype=np.float32),
+            chord=np.asarray(chords),
+            melody_profile=np.eye(12, dtype=np.float32)[:count],
+            sustained_pitch_classes=np.zeros((count, 12), dtype=np.float32),
+            voiced_frames=np.full(count, 50, dtype=np.int32),
+        )
+
+    output = tmp_path / "pretraining"
+    summary = build_pretraining_dataset(manifest_path, processed, output, sequence_length=5)
+    assert summary["examples"] == 5
+    assert chord_quality("C#/G#") == "maj"
+    assert chord_quality("Bb:min7/Db") == "min7"
+    with np.load(output / "train.npz") as train:
+        assert train["root_input"].shape == (3, 5)
+        assert set(train["root_input"][:, 2]) == {14}
+        assert np.isclose(train["sample_weight"].sum(), 2.5)
+    with np.load(output / "validation.npz") as validation:
+        assert np.isclose(validation["sample_weight"].sum(), 2.5)
+    checkpoint = tmp_path / "masked-chord.pt"
+    metrics = train_masked_chord_model(output, checkpoint, epochs=1, batch_size=2)
+    assert metrics["training_examples"] == 3
+    assert checkpoint.is_file()
+
+
+def test_masked_chord_model_and_transposition_are_shape_safe():
+    root = torch.tensor([[0, 14, 7], [12, 14, 2]])
+    quality = torch.tensor([[0, 3, 1], [2, 3, 0]])
+    melody = torch.zeros(2, 3, 12)
+    melody[0, :, 0] = 1
+    melody[1, :, 2] = 1
+    target = torch.tensor([0, 12])
+    shifted_root, shifted_melody, shifted_target = transpose_batch(
+        root, melody, target, torch.tensor([2, 5])
+    )
+    assert shifted_root.tolist() == [[2, 14, 9], [12, 14, 7]]
+    assert shifted_target.tolist() == [2, 12]
+    assert shifted_melody[0, 0, 2] == 1
+    assert shifted_melody[1, 0, 7] == 1
+
+    model = MaskedChordModel(2, 3, hidden_size=16, attention_heads=4, layers=1)
+    root_logits, quality_logits = model(
+        shifted_root, quality, shifted_melody, torch.zeros(2, 3, 2)
+    )
+    assert root_logits.shape == (2, 13)
+    assert quality_logits.shape == (2, 2)
