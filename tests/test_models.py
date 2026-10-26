@@ -7,7 +7,7 @@ from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
     build_quality_report, chord_pitch_classes,
     build_pretraining_dataset, calculate_pretraining_baselines, chord_quality,
-    evaluate_masked_chord_checkpoint, MaskedChordModel,
+    evaluate_masked_chord_checkpoint, generate_chord_suggestions, MaskedChordModel,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
     preprocess_manifest, smooth_chord_intervals, train_masked_chord_model, train_ranker,
@@ -254,6 +254,15 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
         output, resumed, split="validation", device="cpu"
     )
     assert set(evaluation) >= {"quality_macro_accuracy", "root_macro_accuracy"}
+    suggestions_path = tmp_path / "suggestions.csv"
+    suggestion_summary = generate_chord_suggestions(
+        output, resumed, suggestions_path, track_id="track-b", top_k=3, device="cpu"
+    )
+    suggestions = pd.read_csv(suggestions_path)
+    assert suggestion_summary["segments"] == 2
+    assert len(suggestions) == 6
+    assert not (suggestions.source_chord == suggestions.candidate_chord).any()
+    assert set(suggestions.groupby("start").size()) == {3}
 
 
 def test_masked_chord_model_and_transposition_are_shape_safe():

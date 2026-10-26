@@ -202,3 +202,21 @@ uv run reharmonize-pretrain \
 Square-root class balancing reduces majority-major bias while avoiding the instability of full
 inverse-frequency weighting. Compare both aggregate chord accuracy and macro quality accuracy
 against the original checkpoint before selecting the model for downstream chord ranking.
+
+## Inspect model-generated chord alternatives
+
+Generate five alternatives per segment for one processed track. The source BTC chord is excluded
+so the CSV shows actual alternatives rather than reconstruction accuracy:
+
+```bash
+uv run reharmonize-suggest \
+  --dataset-root data/pretraining \
+  --checkpoint artifacts/masked-chord-model-balanced.pt \
+  --track-id track-0001 \
+  --top-k 5 \
+  --output artifacts/track-0001-suggestions.csv
+```
+
+The probability is the model's normalized joint root-and-quality confidence. These alternatives
+are suitable for listening review and later reranking; they are not yet conditioned on a requested
+genre or arrangement style.

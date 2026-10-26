@@ -30,6 +30,7 @@ reharmonize-build-pretraining = "reharmonize_models.pretraining_data:main"
 reharmonize-baselines = "reharmonize_models.evaluation:main"
 reharmonize-pretrain = "reharmonize_models.pretraining:main"
 reharmonize-separate = "reharmonize_models.separation:main"
+reharmonize-suggest = "reharmonize_models.suggestions:main"
 reharmonize-train = "reharmonize_models.training:main"
 
 [dependency-groups]
