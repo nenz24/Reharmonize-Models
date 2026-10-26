@@ -5,7 +5,7 @@ import soundfile as sf
 
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
-    chord_pitch_classes,
+    build_quality_report, chord_pitch_classes,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
     preprocess_manifest, smooth_chord_intervals, train_ranker,
@@ -185,3 +185,10 @@ def test_batch_preprocessing_is_resumable(tmp_path, monkeypatch):
         "track_id": "track-0001", "work_id": "work-0001", "split": "train",
         "start": 0.0, "end": 1.0,
     }]
+
+    summary = build_quality_report(manifest_path, output, tmp_path / "data" / "qc.csv")
+    report = pd.read_csv(tmp_path / "data" / "qc.csv")
+    assert summary["tracks_checked"] == 1
+    assert summary["missing_cache"] == 0
+    assert report.loc[0, "no_chord_ratio"] == 0
+    assert report.loc[0, "voiced_fraction"] == 0.01

@@ -128,3 +128,16 @@ The command caches BTC chords, a chunked HDemucs vocal stem, CREPE melody, chord
 30-second windows, and work-level train/validation/test splits. Re-running the same command skips
 completed tracks. After reviewing the smoke output, process full recordings with
 `--output-root data/processed` and without `--max-duration` or `--work-limit`.
+
+Audit a completed dataset before training:
+
+```bash
+uv run reharmonize-qc \
+  --manifest data/manifest.csv \
+  --processed-root data/processed \
+  --output data/qc.csv
+```
+
+The report flags missing caches, duration mismatches, excessive `N` labels, unusually sparse or
+dense chord changes, and low vocal evidence. Flags request review; they do not automatically delete
+or exclude a track.
