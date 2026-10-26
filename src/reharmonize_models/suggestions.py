@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pretty_midi
+import librosa
+import soundfile as sf
 import torch
 
 from .features import chord_pitch_classes, chord_root_pitch_class, melody_compatibility_features
@@ -228,6 +230,50 @@ def render_suggestion_midi(
     return output_path
 
 
+def render_mixed_audio_preview(
+    audio_path: str | Path,
+    midi_path: str | Path,
+    output_path: str | Path,
+    *,
+    sample_rate: int = 44_100,
+    audio_gain: float = 0.72,
+    chord_gain: float = 0.22,
+) -> Path:
+    """Mix an original recording with a lightweight synthesized chord MIDI preview."""
+    audio_path = Path(audio_path).expanduser().resolve()
+    midi_path = Path(midi_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    audio, _ = librosa.load(audio_path, sr=sample_rate, mono=True)
+    chord_audio = pretty_midi.PrettyMIDI(str(midi_path)).synthesize(fs=sample_rate)
+    length = max(len(audio), len(chord_audio))
+    audio = np.pad(audio, (0, length - len(audio)))
+    chord_audio = np.pad(chord_audio, (0, length - len(chord_audio)))
+    chord_peak = float(np.max(np.abs(chord_audio))) if len(chord_audio) else 0.0
+    if chord_peak > 0:
+        chord_audio = chord_audio / chord_peak
+    mixed = audio_gain * audio + chord_gain * chord_audio
+    peak = float(np.max(np.abs(mixed))) if len(mixed) else 0.0
+    if peak > 0.98:
+        mixed = mixed * (0.98 / peak)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(output_path, mixed, sample_rate, subtype="PCM_16")
+    return output_path
+
+
+def _manifest_audio_path(manifest_path: Path, track_id: str) -> Path:
+    manifest = pd.read_csv(manifest_path)
+    matching = manifest[manifest.track_id.astype(str) == track_id]
+    if len(matching) != 1:
+        raise ValueError(f"Expected one manifest row for {track_id!r}, found {len(matching)}")
+    path = Path(str(matching.iloc[0].audio_path)).expanduser()
+    if path.is_absolute():
+        return path
+    project_candidate = Path.cwd() / path
+    if project_candidate.exists():
+        return project_candidate.resolve()
+    return (manifest_path.parent / path).resolve()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate top-k masked-chord alternatives")
     parser.add_argument("--dataset-root", type=Path, default=Path("data/pretraining"))
@@ -240,6 +286,9 @@ def main() -> None:
     parser.add_argument("--midi-output", type=Path)
     parser.add_argument("--source-midi-output", type=Path)
     parser.add_argument("--change-rate", type=float, default=0.1)
+    parser.add_argument("--manifest", type=Path, default=Path("data/manifest.csv"))
+    parser.add_argument("--source-preview-output", type=Path)
+    parser.add_argument("--preview-output", type=Path)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     args = parser.parse_args()
     summary = generate_chord_suggestions(
@@ -256,6 +305,20 @@ def main() -> None:
         summary["source_midi"] = str(render_suggestion_midi(
             args.output, args.source_midi_output, source_only=True
         ))
+    if args.source_preview_output or args.preview_output:
+        audio_path = _manifest_audio_path(args.manifest.expanduser().resolve(), args.track_id)
+        if args.source_preview_output:
+            if not args.source_midi_output:
+                raise ValueError("--source-preview-output requires --source-midi-output")
+            summary["source_preview"] = str(render_mixed_audio_preview(
+                audio_path, args.source_midi_output, args.source_preview_output
+            ))
+        if args.preview_output:
+            if not args.midi_output:
+                raise ValueError("--preview-output requires --midi-output")
+            summary["preview"] = str(render_mixed_audio_preview(
+                audio_path, args.midi_output, args.preview_output
+            ))
     print(json.dumps(summary, indent=2))
 
 

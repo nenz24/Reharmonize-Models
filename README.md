@@ -217,6 +217,8 @@ uv run reharmonize-suggest \
   --output artifacts/track-0001-suggestions.csv \
   --midi-output artifacts/track-0001-variation.mid \
   --source-midi-output artifacts/track-0001-source.mid \
+  --source-preview-output artifacts/track-0001-source-preview.wav \
+  --preview-output artifacts/track-0001-variation-preview.wav \
   --change-rate 0.1
 ```
 
@@ -226,5 +228,6 @@ diagnostics. The source MIDI renders the BTC progression. The variation MIDI rep
 percent of its segments with rank one, prioritizes model confidence and low semitone proximity, and
 keeps changed segments more than four chord boundaries apart. This preserves the original context
 used for each masked prediction. Import both MIDI files into a DAW with the original recording for
-an A/B listening review. These alternatives are not yet conditioned on a requested genre or
-arrangement style.
+an A/B listening review. The two optional WAV outputs mix the synthesized chords with the original
+recording and can be opened directly without a DAW. These alternatives are not yet conditioned on
+a requested genre or arrangement style.
