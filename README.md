@@ -111,3 +111,20 @@ The command creates `data/manifest.csv` with stable track/work IDs, initial titl
 relative path, SHA-256, duration, and `unknown` genre. Re-running it preserves manual metadata edits,
 detects exact duplicate files, and adds newly discovered audio. Folder names group arrangements;
 the title itself is never used as the dataset identity.
+
+## Batch preprocessing
+
+Start with a disposable 60-second smoke dataset for the first two compositions:
+
+```bash
+uv run reharmonize-preprocess \
+  --manifest data/manifest.csv \
+  --output-root data/processed-smoke \
+  --work-limit 2 \
+  --max-duration 60
+```
+
+The command caches BTC chords, a chunked HDemucs vocal stem, CREPE melody, chord-level features,
+30-second windows, and work-level train/validation/test splits. Re-running the same command skips
+completed tracks. After reviewing the smoke output, process full recordings with
+`--output-root data/processed` and without `--max-duration` or `--work-limit`.

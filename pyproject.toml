@@ -24,6 +24,7 @@ dependencies = [
 [project.scripts]
 reharmonize-detect = "reharmonize_models.btc:main"
 reharmonize-dataset = "reharmonize_models.dataset:main"
+reharmonize-preprocess = "reharmonize_models.preprocess:main"
 reharmonize-separate = "reharmonize_models.separation:main"
 reharmonize-train = "reharmonize_models.training:main"
 

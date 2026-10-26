@@ -4,10 +4,11 @@ import torch
 import soundfile as sf
 
 from reharmonize_models import (
-    ChordCandidateRanker, aggregate_melody_by_chord, build_manifest, chord_pitch_classes,
+    ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
+    chord_pitch_classes,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
-    smooth_chord_intervals, train_ranker,
+    preprocess_manifest, smooth_chord_intervals, train_ranker,
 )
 from reharmonize_models.btc import _collapse_predictions
 
@@ -136,3 +137,51 @@ def test_manifest_generation_groups_versions_and_preserves_metadata(tmp_path, mo
     build_manifest(audio_root, manifest_path)
     refreshed = pd.read_csv(manifest_path)
     assert refreshed.loc[refreshed.track_id == manifest.iloc[0].track_id, "primary_genre"].item() == "worship"
+
+
+def test_work_splits_never_separate_arrangements():
+    manifest = pd.DataFrame({"work_id": [f"work-{index:04d}" for index in range(20) for _ in range(2)]})
+    splits = assign_work_splits(manifest, seed=7)
+    assert set(splits.values()) == {"train", "validation", "test"}
+    assert len(splits) == 20
+
+
+def test_batch_preprocessing_is_resumable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    audio = tmp_path / "data" / "audio" / "song" / "take.wav"
+    audio.parent.mkdir(parents=True)
+    sf.write(audio, np.zeros(16_000), 16_000)
+    manifest = pd.DataFrame([{
+        "track_id": "track-0001", "work_id": "work-0001",
+        "audio_path": "data/audio/song/take.wav", "sha256": "abc", "status": "ready",
+    }])
+    manifest_path = tmp_path / "data" / "manifest.csv"
+    manifest.to_csv(manifest_path, index=False)
+
+    class FakeDetector:
+        def detect(self, path, duration=None):
+            return pd.DataFrame([(0.0, 1.0, "C")], columns=["start", "end", "chord"])
+
+    class FakeSeparator:
+        def separate(self, source, output, duration=None):
+            sf.write(output, np.zeros(16_000), 16_000)
+            return output
+
+    melody = pd.DataFrame({
+        "time": [0.1], "frequency_hz": [261.6], "confidence": [0.9],
+        "midi": [60.0], "pitch_class": [0.0],
+    })
+    monkeypatch.setattr("reharmonize_models.preprocess.BTCChordDetector", FakeDetector)
+    monkeypatch.setattr("reharmonize_models.preprocess.VocalSeparator", FakeSeparator)
+    monkeypatch.setattr("reharmonize_models.preprocess.melody_pitch_track", lambda *args, **kwargs: melody)
+
+    output = tmp_path / "data" / "processed-smoke"
+    first = preprocess_manifest(manifest_path, output, max_duration=60)
+    second = preprocess_manifest(manifest_path, output, max_duration=60)
+    assert first["completed"] == 1
+    assert second["skipped_cached"] == 1
+    assert (output / "track-0001" / "features.npz").is_file()
+    assert pd.read_csv(output / "windows.csv").to_dict("records") == [{
+        "track_id": "track-0001", "work_id": "work-0001", "split": "train",
+        "start": 0.0, "end": 1.0,
+    }]
