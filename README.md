@@ -171,3 +171,20 @@ The trainer reports root, quality, and complete-chord accuracy on validation dat
 epoch and saves the state with the lowest validation loss. Its final report also evaluates the
 held-out test works. This checkpoint learns a general harmony-and-melody representation; genre or
 arrangement controls can be added in a later fine-tuning stage without changing the base dataset.
+
+Compare test accuracy with work-balanced majority and neighboring-chord baselines:
+
+```bash
+uv run reharmonize-baselines --dataset-root data/pretraining --split test
+```
+
+When the best validation epoch is still the final epoch, continue from the saved model instead of
+restarting its learned weights:
+
+```bash
+uv run reharmonize-pretrain \
+  --dataset-root data/pretraining \
+  --output artifacts/masked-chord-model-continued.pt \
+  --resume artifacts/masked-chord-model.pt \
+  --epochs 20
+```

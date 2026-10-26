@@ -76,6 +76,89 @@ def _load_split(path: Path) -> TensorDataset:
     )
 
 
+def _weighted_prediction_metrics(
+    predicted_root: np.ndarray,
+    predicted_quality: np.ndarray,
+    target_root: np.ndarray,
+    target_quality: np.ndarray,
+    weight: np.ndarray,
+) -> dict[str, float]:
+    denominator = max(float(weight.sum()), 1e-8)
+    root_correct = predicted_root == target_root
+    quality_correct = predicted_quality == target_quality
+    return {
+        "root_accuracy": float((root_correct * weight).sum() / denominator),
+        "quality_accuracy": float((quality_correct * weight).sum() / denominator),
+        "chord_accuracy": float(((root_correct & quality_correct) * weight).sum() / denominator),
+    }
+
+
+def calculate_pretraining_baselines(
+    dataset_root: str | Path, *, split: str = "test",
+) -> dict[str, object]:
+    """Measure simple work-balanced baselines for masked-chord accuracy."""
+    dataset_root = Path(dataset_root).expanduser().resolve()
+    vocabulary = json.loads((dataset_root / "vocabulary.json").read_text())
+    quality_classes = len(vocabulary["qualities"])
+    with np.load(dataset_root / "train.npz") as train:
+        train_root = train["target_root"]
+        train_quality = train["target_quality"]
+        train_weight = train["sample_weight"]
+    with np.load(dataset_root / f"{split}.npz") as evaluation:
+        root_input = evaluation["root_input"]
+        quality_input = evaluation["quality_input"]
+        target_root = evaluation["target_root"]
+        target_quality = evaluation["target_quality"]
+        weight = evaluation["sample_weight"]
+
+    root_counts = np.bincount(train_root, weights=train_weight, minlength=13)
+    quality_counts = np.bincount(
+        train_quality, weights=train_weight, minlength=quality_classes
+    )
+    joint_counts = np.bincount(
+        train_root * quality_classes + train_quality,
+        weights=train_weight,
+        minlength=13 * quality_classes,
+    )
+    majority_root = int(root_counts.argmax())
+    majority_quality = int(quality_counts.argmax())
+    majority_joint = int(joint_counts.argmax())
+    majority_chord_root = majority_joint // quality_classes
+    majority_chord_quality = majority_joint % quality_classes
+    center = root_input.shape[1] // 2
+    examples = len(target_root)
+
+    def constant(value: int) -> np.ndarray:
+        return np.full(examples, value, dtype=np.int64)
+
+    return {
+        "split": split,
+        "examples": examples,
+        "independent_majority": _weighted_prediction_metrics(
+            constant(majority_root), constant(majority_quality),
+            target_root, target_quality, weight,
+        ),
+        "majority_chord": _weighted_prediction_metrics(
+            constant(majority_chord_root), constant(majority_chord_quality),
+            target_root, target_quality, weight,
+        ),
+        "copy_previous": _weighted_prediction_metrics(
+            root_input[:, center - 1], quality_input[:, center - 1],
+            target_root, target_quality, weight,
+        ),
+        "copy_next": _weighted_prediction_metrics(
+            root_input[:, center + 1], quality_input[:, center + 1],
+            target_root, target_quality, weight,
+        ),
+        "majority_labels": {
+            "root": majority_root,
+            "quality": vocabulary["qualities"][majority_quality],
+            "chord_root": majority_chord_root,
+            "chord_quality": vocabulary["qualities"][majority_chord_quality],
+        },
+    }
+
+
 def transpose_batch(
     root_input: torch.Tensor,
     melody: torch.Tensor,
@@ -139,6 +222,7 @@ def train_masked_chord_model(
     learning_rate: float = 3e-4,
     seed: int = 42,
     device: str = "auto",
+    resume_from: str | Path | None = None,
 ) -> dict[str, object]:
     """Train a transpose-augmented masked chord model and retain the best validation state."""
     if epochs < 1:
@@ -166,11 +250,24 @@ def train_masked_chord_model(
     model = MaskedChordModel(
         len(vocabulary["qualities"]), int(vocabulary["sequence_length"])
     ).to(torch_device)
+    resumed_checkpoint: str | None = None
+    previous_best_loss = float("inf")
+    if resume_from is not None:
+        resume_path = Path(resume_from).expanduser().resolve()
+        checkpoint = torch.load(resume_path, map_location="cpu", weights_only=False)
+        if checkpoint.get("vocabulary") != vocabulary:
+            raise ValueError("Resume checkpoint vocabulary does not match this dataset")
+        model.load_state_dict(checkpoint["model"])
+        previous_best_loss = float(checkpoint.get("best_validation_loss", float("inf")))
+        resumed_checkpoint = str(resume_path)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss(reduction="none")
     history: list[dict[str, float | int]] = []
-    best_loss = float("inf")
-    best_state: dict[str, torch.Tensor] | None = None
+    best_loss = previous_best_loss
+    best_state: dict[str, torch.Tensor] | None = (
+        {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+        if resume_from is not None else None
+    )
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -225,12 +322,15 @@ def train_masked_chord_model(
         "best_validation_loss": best_loss,
         "test_metrics": test_metrics,
         "feature_version": 1,
+        "epochs_completed": epochs,
+        "resumed_from": resumed_checkpoint,
     }, output_path)
     metrics: dict[str, object] = {
         "epochs": epochs,
         "training_examples": len(train_data),
         "validation_examples": len(validation_data),
         "device": str(torch_device),
+        "resumed_from": resumed_checkpoint,
         "best_validation_loss": best_loss,
         "test": test_metrics,
         "checkpoint": str(output_path),
@@ -250,10 +350,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+    parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
     metrics = train_masked_chord_model(
         args.dataset_root, args.output, epochs=args.epochs,
         batch_size=args.batch_size, learning_rate=args.learning_rate, device=args.device,
+        resume_from=args.resume,
     )
     print(json.dumps(metrics, indent=2))
 
