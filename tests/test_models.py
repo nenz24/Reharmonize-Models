@@ -288,9 +288,14 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
     review, review_plan = render_ab_review(
         original_audio, source_midi, midi_path, suggestions_path,
         tmp_path / "review.wav", sample_rate=8_000, review_count=1,
+        html_output=tmp_path / "review.html",
     )
     assert review.stat().st_size > 0
     assert pd.read_csv(review_plan).to_dict("records")[0]["review_order"] == 1
+    review_html = (tmp_path / "review.html").read_text()
+    assert "Download feedback CSV" in review_html
+    assert (tmp_path / "review-clips" / "01-source.wav").is_file()
+    assert (tmp_path / "review-clips" / "01-variation.wav").is_file()
 
 
 def test_masked_chord_model_and_transposition_are_shape_safe():

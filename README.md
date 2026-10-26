@@ -220,6 +220,7 @@ uv run reharmonize-suggest \
   --source-preview-output artifacts/track-0001-source-preview.wav \
   --preview-output artifacts/track-0001-variation-preview.wav \
   --review-output artifacts/track-0001-ab-review.wav \
+  --review-html-output artifacts/track-0001-review.html \
   --review-count 5 \
   --review-stem vocals \
   --change-rate 0.1
@@ -241,3 +242,7 @@ same excerpt. Chords are mixed louder than in the full-song previews. A CSV besi
 records the playback order, original timestamp, source chord, and candidate chord. Vocal-only review
 is the default because mixing suggestions over the original accompaniment plays two harmonies at
 once and biases both alternatives. Use `--review-stem original` only to diagnose alignment.
+
+Open the generated HTML file to play Source and Variation separately for each excerpt. Choose
+Source, Variation, Both, Neither, or Unsure, add optional notes, then use **Download feedback CSV**.
+This produces explicit preference data without requiring music-theory labels.

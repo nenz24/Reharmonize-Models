@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from pathlib import Path
 
@@ -304,6 +305,7 @@ def render_ab_review(
     review_count: int = 5,
     context_seconds: float = 1.5,
     sample_rate: int = 44_100,
+    html_output: str | Path | None = None,
 ) -> tuple[Path, Path]:
     """Create a compact, loud A/B reel for the strongest sparse chord replacements."""
     if review_count < 1:
@@ -331,6 +333,11 @@ def render_ab_review(
     plan = plan.sort_values("selection_score", ascending=False).head(review_count).copy()
     plan.insert(0, "review_order", np.arange(1, len(plan) + 1))
     chunks: list[np.ndarray] = []
+    html_cards: list[str] = []
+    html_path = Path(html_output).expanduser().resolve() if html_output else None
+    clips_dir = html_path.parent / f"{html_path.stem}-clips" if html_path else None
+    if clips_dir:
+        clips_dir.mkdir(parents=True, exist_ok=True)
 
     def cue(beeps: int) -> np.ndarray:
         beep_length = round(0.12 * sample_rate)
@@ -352,16 +359,71 @@ def render_ab_review(
         end_seconds = min(length / sample_rate, float(row.end) + context_seconds)
         start = round(start_seconds * sample_rate)
         end = round(end_seconds * sample_rate)
+        source_clip = mix_clip(source, start, end)
+        variation_clip = mix_clip(variation, start, end)
         chunks.extend([
-            cue(1), mix_clip(source, start, end), np.zeros(round(0.45 * sample_rate)),
-            cue(2), mix_clip(variation, start, end), np.zeros(round(0.8 * sample_rate)),
+            cue(1), source_clip, np.zeros(round(0.45 * sample_rate)),
+            cue(2), variation_clip, np.zeros(round(0.8 * sample_rate)),
         ])
+        if html_path and clips_dir:
+            order = int(row.review_order)
+            source_path = clips_dir / f"{order:02d}-source.wav"
+            variation_path = clips_dir / f"{order:02d}-variation.wav"
+            sf.write(source_path, source_clip, sample_rate, subtype="PCM_16")
+            sf.write(variation_path, variation_clip, sample_rate, subtype="PCM_16")
+            source_url = source_path.relative_to(html_path.parent).as_posix()
+            variation_url = variation_path.relative_to(html_path.parent).as_posix()
+            source_chord = html.escape(str(row.source_chord))
+            candidate_chord = html.escape(str(row.candidate_chord))
+            html_cards.append(f"""
+<section class="card" data-order="{order}" data-start="{float(row.start):.3f}"
+ data-end="{float(row.end):.3f}" data-source="{source_chord}"
+ data-candidate="{candidate_chord}">
+  <h2>Bagian {order} <small>{float(row.start):.1f}s · {source_chord} → {candidate_chord}</small></h2>
+  <div class="players">
+    <label>Source<audio controls preload="metadata" src="{source_url}"></audio></label>
+    <label>Variation<audio controls preload="metadata" src="{variation_url}"></audio></label>
+  </div>
+  <div class="choices">
+    {''.join(f'<label><input type="radio" name="choice-{order}" value="{value}"> {label}</label>' for value, label in [('source','Source'),('variation','Variation'),('both','Both'),('neither','Neither'),('unsure','Unsure')])}
+  </div>
+  <input class="comment" placeholder="Catatan opsional">
+</section>""")
     review_audio = np.concatenate(chunks) if chunks else np.zeros(sample_rate)
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(output_path, review_audio, sample_rate, subtype="PCM_16")
     plan_path = output_path.with_suffix(".csv")
     plan.to_csv(plan_path, index=False)
+    if html_path:
+        html_path.write_text(f"""<!doctype html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Chord A/B Review</title><style>
+body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:32px auto;padding:0 16px;background:#f5f5f7;color:#1d1d1f}}
+.card{{background:white;border-radius:14px;padding:18px;margin:16px 0;box-shadow:0 2px 10px #0001}}
+h1{{margin-bottom:4px}} h2{{margin-top:0}} small{{font-size:14px;color:#666;font-weight:400}}
+.players{{display:grid;grid-template-columns:1fr 1fr;gap:16px}} audio{{display:block;width:100%;margin-top:6px}}
+.choices{{display:flex;flex-wrap:wrap;gap:14px;margin:16px 0}} .comment{{width:100%;box-sizing:border-box;padding:10px}}
+button{{font-size:16px;padding:12px 18px;border:0;border-radius:10px;background:#147ce5;color:white;cursor:pointer}}
+@media(max-width:600px){{.players{{grid-template-columns:1fr}}}}
+</style></head><body>
+<h1>Chord A/B Review</h1><p>Dengarkan Source dan Variation, lalu pilih berdasarkan pendengaran Anda.</p>
+{''.join(html_cards)}
+<button onclick="downloadCSV()">Download feedback CSV</button>
+<script>
+function csvCell(value){{return '"'+String(value??'').replaceAll('"','""')+'"'}}
+function downloadCSV(){{
+ const rows=[['review_order','start','end','source_chord','candidate_chord','choice','comment']];
+ document.querySelectorAll('.card').forEach(card=>{{
+  const checked=card.querySelector('input[type=radio]:checked');
+  rows.push([card.dataset.order,card.dataset.start,card.dataset.end,card.dataset.source,
+    card.dataset.candidate,checked?checked.value:'',card.querySelector('.comment').value]);
+ }});
+ const csv=rows.map(row=>row.map(csvCell).join(',')).join('\\n');
+ const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{{type:'text/csv'}}));
+ link.download='chord-feedback.csv';link.click();URL.revokeObjectURL(link.href);
+}}
+</script></body></html>""")
     return output_path, plan_path
 
 
@@ -395,6 +457,7 @@ def main() -> None:
     parser.add_argument("--source-preview-output", type=Path)
     parser.add_argument("--preview-output", type=Path)
     parser.add_argument("--review-output", type=Path)
+    parser.add_argument("--review-html-output", type=Path)
     parser.add_argument("--review-count", type=int, default=5)
     parser.add_argument("--review-stem", choices=["vocals", "original"], default="vocals")
     parser.add_argument("--processed-root", type=Path, default=Path("data/processed"))
@@ -414,7 +477,10 @@ def main() -> None:
         summary["source_midi"] = str(render_suggestion_midi(
             args.output, args.source_midi_output, source_only=True
         ))
-    if args.source_preview_output or args.preview_output or args.review_output:
+    if (
+        args.source_preview_output or args.preview_output
+        or args.review_output or args.review_html_output
+    ):
         audio_path = _manifest_audio_path(args.manifest.expanduser().resolve(), args.track_id)
         if args.source_preview_output:
             if not args.source_midi_output:
@@ -428,7 +494,7 @@ def main() -> None:
             summary["preview"] = str(render_mixed_audio_preview(
                 audio_path, args.midi_output, args.preview_output
             ))
-        if args.review_output:
+        if args.review_output or args.review_html_output:
             if not args.source_midi_output or not args.midi_output:
                 raise ValueError(
                     "--review-output requires --source-midi-output and --midi-output"
@@ -443,14 +509,18 @@ def main() -> None:
                         f"Vocal stem not found: {review_audio}. Use --review-stem original "
                         "or check --processed-root."
                     )
+            review_output = args.review_output or Path("artifacts/chord-ab-review.wav")
             review_path, plan_path = render_ab_review(
                 review_audio, args.source_midi_output, args.midi_output, args.output,
-                args.review_output, change_rate=args.change_rate,
+                review_output, change_rate=args.change_rate,
                 review_count=args.review_count,
+                html_output=args.review_html_output,
             )
             summary["review"] = str(review_path)
             summary["review_plan"] = str(plan_path)
             summary["review_stem"] = args.review_stem
+            if args.review_html_output:
+                summary["review_html"] = str(args.review_html_output.expanduser().resolve())
     print(json.dumps(summary, indent=2))
 
 
