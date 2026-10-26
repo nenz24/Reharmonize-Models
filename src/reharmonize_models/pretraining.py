@@ -184,6 +184,10 @@ def _evaluate(
     model.eval()
     weight_total = root_correct = quality_correct = chord_correct = 0.0
     root_loss_total = quality_loss_total = 0.0
+    root_support = np.zeros(13, dtype=np.float64)
+    root_class_correct = np.zeros(13, dtype=np.float64)
+    quality_support = np.zeros(model.quality_head.out_features, dtype=np.float64)
+    quality_class_correct = np.zeros(model.quality_head.out_features, dtype=np.float64)
     criterion = nn.CrossEntropyLoss(reduction="none")
     with torch.inference_mode():
         for root, quality, melody, scalars, target_root, target_quality, weight in loader:
@@ -205,11 +209,85 @@ def _evaluate(
             )
             root_loss_total += float((criterion(root_logits, target_root) * weight).sum())
             quality_loss_total += float((criterion(quality_logits, target_quality) * weight).sum())
+            for target, correct, support, class_correct in [
+                (target_root, root_prediction == target_root, root_support, root_class_correct),
+                (
+                    target_quality, quality_prediction == target_quality,
+                    quality_support, quality_class_correct,
+                ),
+            ]:
+                target_np = target.detach().cpu().numpy()
+                weight_np = weight.detach().cpu().numpy()
+                correct_np = correct.detach().cpu().numpy()
+                support += np.bincount(target_np, weights=weight_np, minlength=len(support))
+                class_correct += np.bincount(
+                    target_np, weights=weight_np * correct_np, minlength=len(support)
+                )
+    root_present = root_support > 0
+    quality_present = quality_support > 0
     return {
         "loss": (root_loss_total + quality_loss_total) / max(weight_total, 1e-8),
         "root_accuracy": root_correct / max(weight_total, 1e-8),
         "quality_accuracy": quality_correct / max(weight_total, 1e-8),
         "chord_accuracy": chord_correct / max(weight_total, 1e-8),
+        "root_macro_accuracy": float(
+            np.mean(root_class_correct[root_present] / root_support[root_present])
+        ),
+        "quality_macro_accuracy": float(
+            np.mean(quality_class_correct[quality_present] / quality_support[quality_present])
+        ),
+    }
+
+
+def _quality_weights(
+    dataset: TensorDataset, mode: str, quality_classes: int,
+) -> torch.Tensor | None:
+    if mode == "none":
+        return None
+    targets = dataset.tensors[5].numpy()
+    sample_weights = dataset.tensors[6].numpy()
+    counts = np.bincount(targets, weights=sample_weights, minlength=quality_classes)
+    if mode != "sqrt":
+        raise ValueError("quality_balance must be 'none' or 'sqrt'")
+    present = counts > 0
+    weights = np.zeros(quality_classes, dtype=np.float64)
+    weights[present] = 1.0 / np.sqrt(counts[present])
+    weights[present] /= np.average(weights[present], weights=counts[present])
+    return torch.from_numpy(weights.astype(np.float32))
+
+
+def evaluate_masked_chord_checkpoint(
+    dataset_root: str | Path,
+    checkpoint_path: str | Path,
+    *,
+    split: str = "test",
+    batch_size: int = 128,
+    device: str = "auto",
+) -> dict[str, object]:
+    """Evaluate a saved checkpoint with work-balanced aggregate and macro metrics."""
+    dataset_root = Path(dataset_root).expanduser().resolve()
+    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+    vocabulary = json.loads((dataset_root / "vocabulary.json").read_text())
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if checkpoint.get("vocabulary") != vocabulary:
+        raise ValueError("Checkpoint vocabulary does not match this dataset")
+    if device == "auto":
+        device = (
+            "mps" if torch.backends.mps.is_available()
+            else "cuda" if torch.cuda.is_available()
+            else "cpu"
+        )
+    torch_device = torch.device(device)
+    model = MaskedChordModel(
+        len(vocabulary["qualities"]), int(vocabulary["sequence_length"])
+    ).to(torch_device)
+    model.load_state_dict(checkpoint["model"])
+    dataset = _load_split(dataset_root / f"{split}.npz")
+    return {
+        "split": split,
+        "examples": len(dataset),
+        "device": str(torch_device),
+        **_evaluate(model, DataLoader(dataset, batch_size=batch_size), torch_device),
     }
 
 
@@ -223,6 +301,7 @@ def train_masked_chord_model(
     seed: int = 42,
     device: str = "auto",
     resume_from: str | Path | None = None,
+    quality_balance: str = "none",
 ) -> dict[str, object]:
     """Train a transpose-augmented masked chord model and retain the best validation state."""
     if epochs < 1:
@@ -261,12 +340,19 @@ def train_masked_chord_model(
         previous_best_loss = float(checkpoint.get("best_validation_loss", float("inf")))
         resumed_checkpoint = str(resume_path)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-2)
-    criterion = nn.CrossEntropyLoss(reduction="none")
+    root_criterion = nn.CrossEntropyLoss(reduction="none")
+    quality_class_weights = _quality_weights(
+        train_data, quality_balance, len(vocabulary["qualities"])
+    )
+    quality_criterion = nn.CrossEntropyLoss(
+        weight=quality_class_weights.to(torch_device) if quality_class_weights is not None else None,
+        reduction="none",
+    )
     history: list[dict[str, float | int]] = []
-    best_loss = previous_best_loss
+    best_loss = previous_best_loss if quality_balance == "none" else float("inf")
     best_state: dict[str, torch.Tensor] | None = (
         {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
-        if resume_from is not None else None
+        if resume_from is not None and quality_balance == "none" else None
     )
 
     for epoch in range(1, epochs + 1):
@@ -284,7 +370,9 @@ def train_masked_chord_model(
             root, melody, target_root = transpose_batch(root, melody, target_root, shifts)
             optimizer.zero_grad()
             root_logits, quality_logits = model(root, quality, melody, scalars)
-            losses = criterion(root_logits, target_root) + criterion(quality_logits, target_quality)
+            losses = root_criterion(root_logits, target_root) + quality_criterion(
+                quality_logits, target_quality
+            )
             loss = (losses * weight).sum() / weight.sum()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -324,6 +412,7 @@ def train_masked_chord_model(
         "feature_version": 1,
         "epochs_completed": epochs,
         "resumed_from": resumed_checkpoint,
+        "quality_balance": quality_balance,
     }, output_path)
     metrics: dict[str, object] = {
         "epochs": epochs,
@@ -331,6 +420,7 @@ def train_masked_chord_model(
         "validation_examples": len(validation_data),
         "device": str(torch_device),
         "resumed_from": resumed_checkpoint,
+        "quality_balance": quality_balance,
         "best_validation_loss": best_loss,
         "test": test_metrics,
         "checkpoint": str(output_path),
@@ -351,11 +441,12 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--quality-balance", choices=["none", "sqrt"], default="none")
     args = parser.parse_args()
     metrics = train_masked_chord_model(
         args.dataset_root, args.output, epochs=args.epochs,
         batch_size=args.batch_size, learning_rate=args.learning_rate, device=args.device,
-        resume_from=args.resume,
+        resume_from=args.resume, quality_balance=args.quality_balance,
     )
     print(json.dumps(metrics, indent=2))
 

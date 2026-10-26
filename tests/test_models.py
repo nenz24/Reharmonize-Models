@@ -6,7 +6,8 @@ import soundfile as sf
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
     build_quality_report, chord_pitch_classes,
-    build_pretraining_dataset, calculate_pretraining_baselines, chord_quality, MaskedChordModel,
+    build_pretraining_dataset, calculate_pretraining_baselines, chord_quality,
+    evaluate_masked_chord_checkpoint, MaskedChordModel,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
     preprocess_manifest, smooth_chord_intervals, train_masked_chord_model, train_ranker,
@@ -244,10 +245,15 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
     assert set(baselines) >= {"majority_chord", "copy_previous", "copy_next"}
     resumed = tmp_path / "masked-chord-resumed.pt"
     resumed_metrics = train_masked_chord_model(
-        output, resumed, epochs=1, batch_size=2, resume_from=checkpoint
+        output, resumed, epochs=1, batch_size=2, resume_from=checkpoint,
+        quality_balance="sqrt",
     )
     assert resumed_metrics["resumed_from"] == str(checkpoint.resolve())
     assert resumed.is_file()
+    evaluation = evaluate_masked_chord_checkpoint(
+        output, resumed, split="validation", device="cpu"
+    )
+    assert set(evaluation) >= {"quality_macro_accuracy", "root_macro_accuracy"}
 
 
 def test_masked_chord_model_and_transposition_are_shape_safe():

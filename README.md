@@ -178,6 +178,15 @@ Compare test accuracy with work-balanced majority and neighboring-chord baseline
 uv run reharmonize-baselines --dataset-root data/pretraining --split test
 ```
 
+Pass a checkpoint to report its aggregate and macro class accuracy on the same split:
+
+```bash
+uv run reharmonize-baselines \
+  --dataset-root data/pretraining \
+  --split test \
+  --checkpoint artifacts/masked-chord-model.pt
+```
+
 When the best validation epoch is still the final epoch, continue from the saved model instead of
 restarting its learned weights:
 
@@ -186,5 +195,10 @@ uv run reharmonize-pretrain \
   --dataset-root data/pretraining \
   --output artifacts/masked-chord-model-continued.pt \
   --resume artifacts/masked-chord-model.pt \
+  --quality-balance sqrt \
   --epochs 20
 ```
+
+Square-root class balancing reduces majority-major bias while avoiding the instability of full
+inverse-frequency weighting. Compare both aggregate chord accuracy and macro quality accuracy
+against the original checkpoint before selecting the model for downstream chord ranking.

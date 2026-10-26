@@ -9,8 +9,8 @@ from .ranker import ChordCandidateRanker, pairwise_ranking_loss
 from .preprocess import assign_work_splits, preprocess_manifest
 from .quality import build_quality_report
 from .pretraining import (
-    MaskedChordModel, calculate_pretraining_baselines, train_masked_chord_model,
-    transpose_batch,
+    MaskedChordModel, calculate_pretraining_baselines, evaluate_masked_chord_checkpoint,
+    train_masked_chord_model, transpose_batch,
 )
 from .pretraining_data import build_pretraining_dataset, chord_quality
 from .separation import VocalSeparator, separate_vocals
@@ -26,5 +26,6 @@ __all__ = [
     "detect_chords", "estimate_key", "key_candidates", "melody_clash_score",
     "melody_compatibility_features", "melody_pitch_track", "pairwise_ranking_loss",
     "preference_pairs", "preprocess_manifest", "save_lab", "separate_vocals",
-    "smooth_chord_intervals", "train_masked_chord_model", "train_ranker", "transpose_batch",
+    "evaluate_masked_chord_checkpoint", "smooth_chord_intervals",
+    "train_masked_chord_model", "train_ranker", "transpose_batch",
 ]
