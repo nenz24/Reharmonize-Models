@@ -222,6 +222,7 @@ uv run reharmonize-suggest \
   --review-output artifacts/track-0001-ab-review.wav \
   --review-html-output artifacts/track-0001-review.html \
   --review-count 5 \
+  --review-rank 1 \
   --review-stem vocals \
   --change-rate 0.1
 ```

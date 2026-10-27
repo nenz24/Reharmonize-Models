@@ -295,6 +295,8 @@ def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
     assert pd.read_csv(review_plan).to_dict("records")[0]["review_order"] == 1
     review_html = (tmp_path / "review.html").read_text()
     assert "Download feedback CSV" in review_html
+    assert "candidate_rank" in review_html
+    assert 'data-track="track-b"' in review_html
     assert (tmp_path / "review-clips" / "01-source.wav").is_file()
     assert (tmp_path / "review-clips" / "01-variation.wav").is_file()
 

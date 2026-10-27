@@ -352,6 +352,7 @@ def render_ab_review(
     context_seconds: float = 1.5,
     sample_rate: int = 44_100,
     html_output: str | Path | None = None,
+    rank: int = 1,
 ) -> tuple[Path, Path]:
     """Create a compact, loud A/B reel for the strongest sparse chord replacements."""
     if review_count < 1:
@@ -375,7 +376,7 @@ def render_ab_review(
         if peak > 0:
             chord_audio /= peak
 
-    plan = build_change_plan(suggestions_path, change_rate=change_rate)
+    plan = build_change_plan(suggestions_path, rank=rank, change_rate=change_rate)
     plan = plan.sort_values("selection_score", ascending=False).head(review_count).copy()
     plan.insert(0, "review_order", np.arange(1, len(plan) + 1))
     chunks: list[np.ndarray] = []
@@ -424,8 +425,14 @@ def render_ab_review(
             html_cards.append(f"""
 <section class="card" data-order="{order}" data-start="{float(row.start):.3f}"
  data-end="{float(row.end):.3f}" data-source="{source_chord}"
- data-candidate="{candidate_chord}">
-  <h2>Bagian {order} <small>{float(row.start):.1f}s · {source_chord} → {candidate_chord}</small></h2>
+ data-candidate="{candidate_chord}" data-track="{html.escape(str(row.track_id))}"
+ data-work="{html.escape(str(row.work_id))}" data-split="{html.escape(str(row.split))}"
+ data-rank="{int(row.rank)}" data-probability="{float(row.probability):.8f}"
+ data-chord-tone="{float(row.chord_tone_ratio):.8f}"
+ data-semitone="{float(row.semitone_proximity_ratio):.8f}"
+ data-extension="{float(row.extension_ratio):.8f}"
+ data-evidence="{float(row.evidence):.8f}">
+  <h2>Bagian {order} <small>{float(row.start):.1f}s · rank {int(row.rank)} · {source_chord} → {candidate_chord}</small></h2>
   <div class="players">
     <label>Source<audio controls preload="metadata" src="{source_url}"></audio></label>
     <label>Variation<audio controls preload="metadata" src="{variation_url}"></audio></label>
@@ -459,11 +466,16 @@ button{{font-size:16px;padding:12px 18px;border:0;border-radius:10px;background:
 <script>
 function csvCell(value){{return '"'+String(value??'').replaceAll('"','""')+'"'}}
 function downloadCSV(){{
- const rows=[['review_order','start','end','source_chord','candidate_chord','choice','comment']];
+ const rows=[['track_id','work_id','split','review_order','start','end','source_chord',
+  'candidate_chord','candidate_rank','probability','chord_tone_ratio',
+  'semitone_proximity_ratio','extension_ratio','evidence','choice','comment']];
  document.querySelectorAll('.card').forEach(card=>{{
   const checked=card.querySelector('input[type=radio]:checked');
-  rows.push([card.dataset.order,card.dataset.start,card.dataset.end,card.dataset.source,
-    card.dataset.candidate,checked?checked.value:'',card.querySelector('.comment').value]);
+  rows.push([card.dataset.track,card.dataset.work,card.dataset.split,card.dataset.order,
+    card.dataset.start,card.dataset.end,card.dataset.source,card.dataset.candidate,
+    card.dataset.rank,card.dataset.probability,card.dataset.chordTone,card.dataset.semitone,
+    card.dataset.extension,card.dataset.evidence,checked?checked.value:'',
+    card.querySelector('.comment').value]);
  }});
  const csv=rows.map(row=>row.map(csvCell).join(',')).join('\\n');
  const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{{type:'text/csv'}}));
@@ -505,6 +517,7 @@ def main() -> None:
     parser.add_argument("--review-output", type=Path)
     parser.add_argument("--review-html-output", type=Path)
     parser.add_argument("--review-count", type=int, default=5)
+    parser.add_argument("--review-rank", type=int, default=1)
     parser.add_argument("--review-stem", choices=["vocals", "original"], default="vocals")
     parser.add_argument("--processed-root", type=Path, default=Path("data/processed"))
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
@@ -516,12 +529,13 @@ def main() -> None:
     )
     if args.midi_output:
         summary["midi"] = str(render_suggestion_midi(
-            args.output, args.midi_output, change_rate=args.change_rate
+            args.output, args.midi_output, rank=args.review_rank,
+            change_rate=args.change_rate
         ))
         summary["change_rate"] = args.change_rate
     if args.source_midi_output:
         summary["source_midi"] = str(render_suggestion_midi(
-            args.output, args.source_midi_output, source_only=True
+            args.output, args.source_midi_output, rank=args.review_rank, source_only=True
         ))
     if (
         args.source_preview_output or args.preview_output
@@ -561,10 +575,12 @@ def main() -> None:
                 review_output, change_rate=args.change_rate,
                 review_count=args.review_count,
                 html_output=args.review_html_output,
+                rank=args.review_rank,
             )
             summary["review"] = str(review_path)
             summary["review_plan"] = str(plan_path)
             summary["review_stem"] = args.review_stem
+            summary["review_rank"] = args.review_rank
             if args.review_html_output:
                 summary["review_html"] = str(args.review_html_output.expanduser().resolve())
     print(json.dumps(summary, indent=2))
