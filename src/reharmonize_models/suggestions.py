@@ -479,7 +479,9 @@ function downloadCSV(){{
  }});
  const csv=rows.map(row=>row.map(csvCell).join(',')).join('\\n');
  const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{{type:'text/csv'}}));
- link.download='chord-feedback.csv';link.click();URL.revokeObjectURL(link.href);
+ const first=document.querySelector('.card');
+ link.download=`${{first.dataset.track}}-rank${{first.dataset.rank}}-feedback.csv`;
+ link.click();URL.revokeObjectURL(link.href);
 }}
 </script></body></html>""")
     return output_path, plan_path
