@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import librosa
 
 from .btc import BTCChordDetector
 from .features import chord_root_pitch_class
@@ -28,6 +29,7 @@ def audit_btc_predictions(
     track_ids: list[str] | None = None,
     duration: float | None = None,
     compare_small_vocabulary: bool = False,
+    compare_chroma: bool = False,
 ) -> dict[str, object]:
     """Run BTC without other perception stages and retain uncertainty diagnostics."""
     manifest_path = Path(manifest_path).expanduser().resolve()
@@ -53,8 +55,9 @@ def audit_btc_predictions(
     for position, track in enumerate(manifest.itertuples(index=False), start=1):
         print(f"[{position}/{total}] {track.track_id}: BTC confidence audit", flush=True)
         try:
+            audio_path = _resolve_audio_path(str(track.audio_path), manifest_path)
             chords = detector.detect_with_confidence(
-                _resolve_audio_path(str(track.audio_path), manifest_path), duration=duration
+                audio_path, duration=duration
             )
             chords.to_csv(output_root / f"{track.track_id}.csv", index=False)
             interval_duration = chords.end.to_numpy() - chords.start.to_numpy()
@@ -74,7 +77,7 @@ def audit_btc_predictions(
             }
             if small_detector is not None:
                 small = small_detector.detect_with_confidence(
-                    _resolve_audio_path(str(track.audio_path), manifest_path), duration=duration
+                    audio_path, duration=duration
                 )
                 small.to_csv(output_root / f"{track.track_id}.small.csv", index=False)
                 comparison = compare_btc_vocabularies(chords, small)
@@ -101,6 +104,21 @@ def audit_btc_predictions(
                         comparison_weights[confident & ~agreement]
                     )), 4),
                 })
+            if compare_chroma:
+                chroma = validate_btc_with_chroma(audio_path, chords, duration=duration)
+                chroma.to_csv(output_root / f"{track.track_id}.chroma.csv", index=False)
+                pitched = chroma.large_root.notna() & chroma.chroma_root.notna()
+                pitched_duration = (chroma.end - chroma.start).where(pitched, 0.0)
+                pitched_total = max(float(pitched_duration.sum()), 1e-8)
+                row.update({
+                    "chroma_root_agreement_ratio": round(float(
+                        pitched_duration[chroma.root_agreement.fillna(False)].sum()
+                        / pitched_total
+                    ), 4),
+                    "chroma_mean_margin": round(float(
+                        np.sum(chroma.chroma_margin * pitched_duration) / pitched_total
+                    ), 4),
+                })
             rows.append(row)
         except Exception as error:
             errors.append({"track_id": str(track.track_id), "error": repr(error)})
@@ -116,6 +134,7 @@ def audit_btc_predictions(
         "report": str(output_root / "audit.csv"),
         "segment_files": str(output_root / "track-*.csv"),
         "compared_small_vocabulary": compare_small_vocabulary,
+        "compared_chroma": compare_chroma,
     }
     (output_root / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
@@ -142,12 +161,79 @@ def compare_btc_vocabularies(
                 "small_chord": small_row.chord,
                 "large_confidence": float(large_row.confidence),
                 "small_confidence": float(small_row.confidence),
+                "large_root": large_root,
+                "small_root": small_root,
                 "root_agreement": large_root == small_root,
             })
         if float(large_row.end) <= float(small_row.end):
             large_index += 1
         if float(small_row.end) <= float(large_row.end):
             small_index += 1
+    return pd.DataFrame(rows)
+
+
+def validate_btc_with_chroma(
+    audio_path: str | Path,
+    chords: pd.DataFrame,
+    *,
+    duration: float | None = None,
+    sample_rate: int = 22_050,
+    hop_length: int = 512,
+) -> pd.DataFrame:
+    """Compare BTC roots with an independent major/minor chroma-template validator."""
+    audio, _ = librosa.load(
+        Path(audio_path).expanduser().resolve(), sr=sample_rate, mono=True, duration=duration
+    )
+    harmonic = librosa.effects.harmonic(audio, margin=4.0)
+    chroma = librosa.feature.chroma_cqt(
+        y=harmonic, sr=sample_rate, hop_length=hop_length
+    )
+    frame_times = librosa.frames_to_time(
+        np.arange(chroma.shape[1]), sr=sample_rate, hop_length=hop_length
+    )
+    templates: list[np.ndarray] = []
+    labels: list[str] = []
+    for root in range(12):
+        for quality, intervals in (("maj", (0, 4, 7)), ("min", (0, 3, 7))):
+            template = np.zeros(12, dtype=np.float64)
+            template[[(root + interval) % 12 for interval in intervals]] = (1.2, 1.0, 1.0)
+            template /= np.linalg.norm(template)
+            templates.append(template)
+            labels.append(f"{root}:{quality}")
+    template_matrix = np.stack(templates)
+    rows: list[dict[str, object]] = []
+    for chord in chords.itertuples(index=False):
+        mask = (frame_times >= float(chord.start)) & (frame_times < float(chord.end))
+        profile = chroma[:, mask].mean(axis=1) if np.any(mask) else np.zeros(12)
+        norm = float(np.linalg.norm(profile))
+        if norm <= 1e-8:
+            chroma_root = np.nan
+            chroma_quality = ""
+            score = margin = 0.0
+        else:
+            scores = template_matrix @ (profile / norm)
+            order = np.argsort(scores)[::-1]
+            best, second = int(order[0]), int(order[1])
+            chroma_root = best // 2
+            chroma_quality = labels[best].split(":", 1)[1]
+            score = float(scores[best])
+            margin = float(scores[best] - scores[second])
+        large_root = chord_root_pitch_class(str(chord.chord))
+        rows.append({
+            "start": float(chord.start),
+            "end": float(chord.end),
+            "large_chord": str(chord.chord),
+            "large_confidence": float(chord.confidence),
+            "large_root": large_root,
+            "chroma_root": chroma_root,
+            "chroma_quality": chroma_quality,
+            "chroma_score": score,
+            "chroma_margin": margin,
+            "root_agreement": (
+                large_root == int(chroma_root)
+                if large_root is not None and not np.isnan(chroma_root) else np.nan
+            ),
+        })
     return pd.DataFrame(rows)
 
 
@@ -158,10 +244,12 @@ def main() -> None:
     parser.add_argument("--track-id", action="append", dest="track_ids")
     parser.add_argument("--duration", type=float)
     parser.add_argument("--compare-small-vocabulary", action="store_true")
+    parser.add_argument("--compare-chroma", action="store_true")
     args = parser.parse_args()
     print(json.dumps(audit_btc_predictions(
         args.manifest, args.output_root, track_ids=args.track_ids, duration=args.duration,
         compare_small_vocabulary=args.compare_small_vocabulary,
+        compare_chroma=args.compare_chroma,
     ), indent=2))
 
 

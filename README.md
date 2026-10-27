@@ -151,7 +151,8 @@ uv run reharmonize-btc-audit \
   --output-root data/btc-audit \
   --track-id track-0016 \
   --track-id track-0023 \
-  --compare-small-vocabulary
+  --compare-small-vocabulary \
+  --compare-chroma
 ```
 
 The command writes one interval CSV per track and a duration-weighted `audit.csv`. Confidence is
@@ -161,6 +162,9 @@ pseudo-labels, but high confidence does not prove that a chord is correct.
 With `--compare-small-vocabulary`, the audit also reports duration-weighted root agreement between
 BTC's 170-class checkpoint and its 25-class major/minor checkpoint. Confident disagreement exposes
 vocabulary sensitivity; agreement between both checkpoints still does not replace ground truth.
+The optional chroma validator compares BTC roots against local harmonic pitch energy using only
+major/minor templates. It is deliberately independent and interpretable: use it to flag BTC labels,
+not as the production chord detector or suggestion model.
 
 ## Self-supervised chord pretraining
 

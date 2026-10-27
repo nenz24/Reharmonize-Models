@@ -16,7 +16,7 @@ from reharmonize_models import (
 )
 from reharmonize_models.btc import _collapse_predictions, _collapse_predictions_with_confidence
 from reharmonize_models.suggestions import _best_voicing
-from reharmonize_models.btc_audit import compare_btc_vocabularies
+from reharmonize_models.btc_audit import compare_btc_vocabularies, validate_btc_with_chroma
 
 
 def test_chord_parser_and_clash_score():
@@ -251,6 +251,20 @@ def test_btc_vocabulary_comparison_is_duration_aligned():
         {"start": 1.0, "end": 2.0},
     ]
     assert comparison.root_agreement.tolist() == [True, False, False]
+
+
+def test_chroma_validator_recovers_synthetic_c_major(tmp_path):
+    sample_rate = 22_050
+    time = np.arange(sample_rate) / sample_rate
+    audio = sum(np.sin(2 * np.pi * frequency * time) for frequency in (261.63, 329.63, 392.0))
+    audio_path = tmp_path / "c-major.wav"
+    sf.write(audio_path, audio / np.max(np.abs(audio)), sample_rate)
+    chords = pd.DataFrame([
+        (0.0, 1.0, "C", 0.8, 0.5, 0.2),
+    ], columns=["start", "end", "chord", "confidence", "margin", "entropy"])
+    validation = validate_btc_with_chroma(audio_path, chords)
+    assert validation.loc[0, "chroma_root"] == 0
+    assert bool(validation.loc[0, "root_agreement"])
 
 
 def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
