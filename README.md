@@ -150,13 +150,17 @@ uv run reharmonize-btc-audit \
   --manifest data/manifest.csv \
   --output-root data/btc-audit \
   --track-id track-0016 \
-  --track-id track-0023
+  --track-id track-0023 \
+  --compare-small-vocabulary
 ```
 
 The command writes one interval CSV per track and a duration-weighted `audit.csv`. Confidence is
 the top chord probability, margin is its distance from the second choice, and normalized entropy
 measures uncertainty across BTC's 170-class vocabulary. Low confidence can identify unreliable
 pseudo-labels, but high confidence does not prove that a chord is correct.
+With `--compare-small-vocabulary`, the audit also reports duration-weighted root agreement between
+BTC's 170-class checkpoint and its 25-class major/minor checkpoint. Confident disagreement exposes
+vocabulary sensitivity; agreement between both checkpoints still does not replace ground truth.
 
 ## Self-supervised chord pretraining
 

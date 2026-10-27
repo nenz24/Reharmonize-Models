@@ -16,6 +16,7 @@ from reharmonize_models import (
 )
 from reharmonize_models.btc import _collapse_predictions, _collapse_predictions_with_confidence
 from reharmonize_models.suggestions import _best_voicing
+from reharmonize_models.btc_audit import compare_btc_vocabularies
 
 
 def test_chord_parser_and_clash_score():
@@ -231,6 +232,25 @@ def test_btc_confidence_audit_writes_segment_and_track_reports(tmp_path, monkeyp
     assert (output / "track-a.csv").is_file()
     assert report.loc[0, "mean_confidence"] == 0.5
     assert report.loc[0, "uncertain_time_ratio"] == 0.5
+
+
+def test_btc_vocabulary_comparison_is_duration_aligned():
+    columns = ["start", "end", "chord", "confidence", "margin", "entropy"]
+    large = pd.DataFrame([
+        (0.0, 1.0, "C:maj7", 0.8, 0.5, 0.2),
+        (1.0, 2.0, "G:7", 0.7, 0.4, 0.3),
+    ], columns=columns)
+    small = pd.DataFrame([
+        (0.0, 0.5, "C", 0.9, 0.7, 0.1),
+        (0.5, 2.0, "F", 0.6, 0.3, 0.4),
+    ], columns=columns)
+    comparison = compare_btc_vocabularies(large, small)
+    assert comparison[["start", "end"]].to_dict("records") == [
+        {"start": 0.0, "end": 0.5},
+        {"start": 0.5, "end": 1.0},
+        {"start": 1.0, "end": 2.0},
+    ]
+    assert comparison.root_agreement.tolist() == [True, False, False]
 
 
 def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):
