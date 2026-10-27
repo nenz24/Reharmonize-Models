@@ -1,5 +1,6 @@
 from .candidates import create_candidate_sheet, estimate_key, key_candidates
 from .dataset import build_manifest
+from .detection_evaluation import evaluate_verified_annotations, initialize_annotation_drafts
 from .features import (
     aggregate_melody_by_chord, chord_pitch_classes, chord_root_pitch_class,
     melody_clash_score, melody_compatibility_features, melody_pitch_track,
@@ -32,7 +33,8 @@ __all__ = [
     "generate_chord_suggestions",
     "melody_compatibility_features", "melody_pitch_track", "pairwise_ranking_loss",
     "preference_pairs", "preprocess_manifest", "save_lab", "separate_vocals",
-    "evaluate_masked_chord_checkpoint", "render_ab_review", "render_mixed_audio_preview",
+    "evaluate_masked_chord_checkpoint", "evaluate_verified_annotations",
+    "initialize_annotation_drafts", "render_ab_review", "render_mixed_audio_preview",
     "render_suggestion_midi", "smooth_chord_intervals",
     "train_masked_chord_model", "train_ranker", "transpose_batch",
 ]

@@ -166,6 +166,33 @@ The optional chroma validator compares BTC roots against local harmonic pitch en
 major/minor templates. It is deliberately independent and interpretable: use it to flag BTC labels,
 not as the production chord detector or suggestion model.
 
+## Verify chord detection against a small gold set
+
+Proxy agreement cannot establish which detector is correct. Create BTC-based drafts for a musician
+or trusted chord-chart annotator to correct:
+
+```bash
+uv run reharmonize-detection-eval init \
+  --processed-root data/processed \
+  --annotations-root data/annotations \
+  --track-id track-0016 \
+  --track-id track-0023 \
+  --track-id track-0033
+```
+
+The command marks every file as `draft`. After labels and boundaries are corrected, set its row to
+`status=verified` and record the annotator in `annotation-status.csv`. Only then run:
+
+```bash
+uv run reharmonize-detection-eval evaluate \
+  --processed-root data/processed \
+  --annotations-root data/annotations \
+  --output data/annotations/evaluation.csv
+```
+
+The evaluator reports standard duration-weighted `mir_eval` root, maj/min, triad, seventh, and
+segmentation scores. It refuses to treat unverified BTC copies as ground truth.
+
 ## Self-supervised chord pretraining
 
 Once QC is reviewed, convert the cached features into masked-chord examples:

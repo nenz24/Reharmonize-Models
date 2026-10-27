@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 import soundfile as sf
 
@@ -8,6 +9,7 @@ from reharmonize_models import (
     audit_btc_predictions, build_quality_report, chord_pitch_classes,
     build_change_plan, build_pretraining_dataset, calculate_pretraining_baselines, chord_quality,
     evaluate_masked_chord_checkpoint, generate_chord_suggestions, MaskedChordModel,
+    evaluate_verified_annotations, initialize_annotation_drafts,
     render_ab_review, render_mixed_audio_preview, render_suggestion_midi,
     create_candidate_sheet, estimate_key, melody_clash_score,
     melody_compatibility_features, pairwise_ranking_loss, save_lab,
@@ -399,3 +401,31 @@ def test_voicing_preserves_common_tones_and_limits_motion():
     assert f_major == [48, 53, 57]
     assert 48 in f_major  # Keep the shared C rather than jumping it by an octave.
     assert max(f_major) - min(f_major) <= 19
+
+
+def test_detection_evaluation_requires_verified_annotations(tmp_path):
+    processed = tmp_path / "processed"
+    track_dir = processed / "track-a"
+    track_dir.mkdir(parents=True)
+    (track_dir / "chords.lab").write_text("0.000 1.000 C\n1.000 2.000 G\n")
+    annotations = tmp_path / "annotations"
+    initialized = initialize_annotation_drafts(processed, annotations, ["track-a"])
+    assert initialized["created"] == 1
+    status = pd.read_csv(annotations / "annotation-status.csv", dtype=str).fillna("")
+    assert status.loc[0, "status"] == "draft"
+    with pytest.raises(ValueError, match="No annotations"):
+        evaluate_verified_annotations(processed, annotations, annotations / "evaluation.csv")
+
+    (annotations / "drafts" / "track-a.lab").write_text(
+        "0.000 1.000 C\n1.000 2.000 F\n"
+    )
+    status.loc[0, "status"] = "verified"
+    status.loc[0, "annotator"] = "tester"
+    status.to_csv(annotations / "annotation-status.csv", index=False)
+    summary = evaluate_verified_annotations(
+        processed, annotations, annotations / "evaluation.csv"
+    )
+    report = pd.read_csv(annotations / "evaluation.csv")
+    assert summary["verified_tracks"] == 1
+    assert report.loc[0, "root"] == 0.5
+    assert report.loc[0, "seg"] == 1.0
