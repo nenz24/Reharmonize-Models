@@ -63,6 +63,45 @@ def _collapse_predictions(
     return pd.DataFrame(rows, columns=["start", "end", "chord"])
 
 
+def _collapse_predictions_with_confidence(
+    predictions: Sequence[int],
+    confidence: Sequence[float],
+    margin: Sequence[float],
+    entropy: Sequence[float],
+    labels: dict[int, str] | list[str],
+    time_unit: float,
+    duration: float,
+) -> pd.DataFrame:
+    """Collapse frame labels while retaining mean uncertainty diagnostics."""
+    if not (
+        len(predictions) == len(confidence) == len(margin) == len(entropy)
+    ):
+        raise ValueError("Prediction and confidence arrays must have equal lengths")
+    if not predictions or duration <= 0:
+        return pd.DataFrame(columns=[
+            "start", "end", "chord", "confidence", "margin", "entropy",
+        ])
+    rows: list[dict[str, object]] = []
+    start_frame = 0
+    for frame in range(1, len(predictions) + 1):
+        boundary = frame == len(predictions) or predictions[frame] != predictions[start_frame]
+        if not boundary:
+            continue
+        start = start_frame * time_unit
+        end = min(frame * time_unit, duration)
+        if end > start:
+            rows.append({
+                "start": start,
+                "end": end,
+                "chord": labels[int(predictions[start_frame])],
+                "confidence": float(np.mean(confidence[start_frame:frame])),
+                "margin": float(np.mean(margin[start_frame:frame])),
+                "entropy": float(np.mean(entropy[start_frame:frame])),
+            })
+        start_frame = frame
+    return pd.DataFrame(rows)
+
+
 def smooth_chord_intervals(chords: pd.DataFrame, *, minimum_duration: float = 0.35) -> pd.DataFrame:
     """Absorb very short BTC intervals into the strongest adjacent segment."""
     required = {"start", "end", "chord"}
@@ -178,6 +217,14 @@ class BTCChordDetector:
 
     def detect(self, audio_path: str | Path, *, duration: float | None = None) -> pd.DataFrame:
         """Return `start`, `end`, and `chord` columns for one audio file."""
+        return self.detect_with_confidence(audio_path, duration=duration)[
+            ["start", "end", "chord"]
+        ]
+
+    def detect_with_confidence(
+        self, audio_path: str | Path, *, duration: float | None = None,
+    ) -> pd.DataFrame:
+        """Return chord intervals with BTC confidence, top-two margin, and entropy."""
         audio_path = Path(audio_path).expanduser().resolve()
         if not audio_path.is_file():
             raise FileNotFoundError(audio_path)
@@ -206,17 +253,36 @@ class BTCChordDetector:
 
         batch = torch.as_tensor(features, dtype=torch.float32, device=self.device).unsqueeze(0)
         predictions: list[int] = []
+        confidence: list[float] = []
+        margin: list[float] = []
+        entropy: list[float] = []
         with torch.inference_mode():
             for start in range(0, batch.shape[1], timestep):
                 encoded, _ = self.model.self_attn_layers(batch[:, start:start + timestep, :])
-                predicted, _ = self.model.output_layer(encoded)
-                predictions.extend(predicted.squeeze(0).cpu().tolist())
+                logits = self.model.output_layer.output_projection(encoded)
+                probabilities = logits.softmax(dim=-1)
+                top_probability, top_index = probabilities.topk(2, dim=-1)
+                predictions.extend(top_index[0, :, 0].cpu().tolist())
+                confidence.extend(top_probability[0, :, 0].cpu().tolist())
+                margin.extend(
+                    (top_probability[0, :, 0] - top_probability[0, :, 1]).cpu().tolist()
+                )
+                normalized_entropy = -(
+                    probabilities * probabilities.clamp_min(1e-12).log()
+                ).sum(dim=-1) / np.log(probabilities.shape[-1])
+                entropy.extend(normalized_entropy.squeeze(0).cpu().tolist())
 
         valid_frames = features.shape[0] - padding
         predictions = predictions[:valid_frames]
+        confidence = confidence[:valid_frames]
+        margin = margin[:valid_frames]
+        entropy = entropy[:valid_frames]
         time_unit = mp3["inst_len"] / timestep
         audio_duration = len(audio) / sample_rate
-        return _collapse_predictions(predictions, self.labels, time_unit, audio_duration)
+        return _collapse_predictions_with_confidence(
+            predictions, confidence, margin, entropy,
+            self.labels, time_unit, audio_duration,
+        )
 
 
 def save_lab(chords: pd.DataFrame, output_path: str | Path) -> Path:

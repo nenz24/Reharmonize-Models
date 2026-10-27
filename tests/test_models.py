@@ -5,7 +5,7 @@ import soundfile as sf
 
 from reharmonize_models import (
     ChordCandidateRanker, aggregate_melody_by_chord, assign_work_splits, build_manifest,
-    build_quality_report, chord_pitch_classes,
+    audit_btc_predictions, build_quality_report, chord_pitch_classes,
     build_change_plan, build_pretraining_dataset, calculate_pretraining_baselines, chord_quality,
     evaluate_masked_chord_checkpoint, generate_chord_suggestions, MaskedChordModel,
     render_ab_review, render_mixed_audio_preview, render_suggestion_midi,
@@ -14,7 +14,7 @@ from reharmonize_models import (
     preprocess_manifest, smooth_chord_intervals, train_masked_chord_model, train_ranker,
     transpose_batch,
 )
-from reharmonize_models.btc import _collapse_predictions
+from reharmonize_models.btc import _collapse_predictions, _collapse_predictions_with_confidence
 from reharmonize_models.suggestions import _best_voicing
 
 
@@ -57,6 +57,14 @@ def test_btc_predictions_become_intervals(tmp_path):
 
     output = save_lab(result, tmp_path / "nested" / "result.lab")
     assert output.read_text() == "0.000 0.200 C\n0.200 0.450 G\n"
+
+    confident = _collapse_predictions_with_confidence(
+        [0, 0, 1], [0.8, 0.6, 0.4], [0.5, 0.3, 0.1], [0.2, 0.4, 0.8],
+        labels, 0.1, 0.3,
+    )
+    assert confident.chord.tolist() == ["C", "G"]
+    assert np.isclose(confident.iloc[0].confidence, 0.7)
+    assert np.isclose(confident.iloc[0].margin, 0.4)
 
 
 def test_smoothing_removes_short_chord_flicker():
@@ -197,6 +205,32 @@ def test_batch_preprocessing_is_resumable(tmp_path, monkeypatch):
     assert summary["missing_cache"] == 0
     assert report.loc[0, "no_chord_ratio"] == 0
     assert report.loc[0, "voiced_fraction"] == 0.01
+
+
+def test_btc_confidence_audit_writes_segment_and_track_reports(tmp_path, monkeypatch):
+    manifest = pd.DataFrame([{
+        "track_id": "track-a", "work_id": "work-a", "title": "Song",
+        "audio_path": "audio.wav", "status": "ready",
+    }])
+    manifest_path = tmp_path / "manifest.csv"
+    manifest.to_csv(manifest_path, index=False)
+    sf.write(tmp_path / "audio.wav", np.zeros(8_000), 8_000)
+
+    class FakeDetector:
+        def detect_with_confidence(self, path, duration=None):
+            return pd.DataFrame([
+                (0.0, 0.5, "C", 0.8, 0.5, 0.2),
+                (0.5, 1.0, "G", 0.2, 0.02, 0.8),
+            ], columns=["start", "end", "chord", "confidence", "margin", "entropy"])
+
+    monkeypatch.setattr("reharmonize_models.btc_audit.BTCChordDetector", FakeDetector)
+    output = tmp_path / "audit"
+    summary = audit_btc_predictions(manifest_path, output)
+    report = pd.read_csv(output / "audit.csv")
+    assert summary["completed"] == 1
+    assert (output / "track-a.csv").is_file()
+    assert report.loc[0, "mean_confidence"] == 0.5
+    assert report.loc[0, "uncertain_time_ratio"] == 0.5
 
 
 def test_pretraining_dataset_masks_targets_and_balances_works(tmp_path):

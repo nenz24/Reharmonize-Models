@@ -5,6 +5,7 @@ from .features import (
     melody_clash_score, melody_compatibility_features, melody_pitch_track,
 )
 from .btc import BTCChordDetector, detect_chords, save_lab, smooth_chord_intervals
+from .btc_audit import audit_btc_predictions
 from .ranker import ChordCandidateRanker, pairwise_ranking_loss
 from .preprocess import assign_work_splits, preprocess_manifest
 from .quality import build_quality_report
@@ -22,7 +23,7 @@ from .training import preference_pairs, train_ranker
 
 __all__ = [
     "BTCChordDetector", "ChordCandidateRanker", "MaskedChordModel", "VocalSeparator",
-    "aggregate_melody_by_chord", "assign_work_splits",
+    "aggregate_melody_by_chord", "assign_work_splits", "audit_btc_predictions",
     "build_change_plan", "build_manifest", "build_pretraining_dataset", "build_quality_report",
     "calculate_pretraining_baselines", "chord_pitch_classes",
     "chord_quality", "chord_root_pitch_class",

@@ -142,6 +142,22 @@ The report flags missing caches, duration mismatches, excessive `N` labels, unus
 dense chord changes, and low vocal evidence. Flags request review; they do not automatically delete
 or exclude a track.
 
+When BTC labels sound incorrect, audit its predictive uncertainty without rerunning vocal
+separation or melody extraction:
+
+```bash
+uv run reharmonize-btc-audit \
+  --manifest data/manifest.csv \
+  --output-root data/btc-audit \
+  --track-id track-0016 \
+  --track-id track-0023
+```
+
+The command writes one interval CSV per track and a duration-weighted `audit.csv`. Confidence is
+the top chord probability, margin is its distance from the second choice, and normalized entropy
+measures uncertainty across BTC's 170-class vocabulary. Low confidence can identify unreliable
+pseudo-labels, but high confidence does not prove that a chord is correct.
+
 ## Self-supervised chord pretraining
 
 Once QC is reviewed, convert the cached features into masked-chord examples:
